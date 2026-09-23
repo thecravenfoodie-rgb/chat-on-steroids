@@ -14,7 +14,7 @@ This file preserves the exact execution cursor for a bounded run when interrupti
 **EXECUTOR:** N/A  
 **SCOPE:** N/A  
 **STARTED_AT:** N/A  
-**CHECKPOINT_AT:** 2026-09-22 19:37 America/New_York  
+**CHECKPOINT_AT:** 2026-09-22 22:14 America/New_York  
 **HANDOFF_SOURCE:** N/A
 
 ### Execution Lease
@@ -26,17 +26,19 @@ This file preserves the exact execution cursor for a bounded run when interrupti
 
 ### Exact Cursor
 
-**LAST_COMMITTED_STEP:** Initial AIOS package records created  
-**CURRENT_ITEM:** None  
-**NEXT_EXECUTABLE_STEP:** Configure ChatGPT Project bootstrap for `thecravenfoodie-rgb/chat-on-steroids` / `.aios/` after repository-layer initialization is verified.
+**LAST_COMMITTED_STEP:** AIOS project memory corrected to package `2026.09.22.5`; canonical fork and Phase 1 integration branch confirmed.  
+**CURRENT_ITEM:** Phase 1 Core integration — resume source implementation.  
+**NEXT_EXECUTABLE_STEP:** Inspect the current local/worktree state for `aios/phase-1-core-integration` and the existing Phase 1 worker/handoff evidence; preserve any uncommitted or completed implementation; then continue the next unfinished Core integration task and run relevant tests.
 
 ### Pending Items
 
-- Provider-adapter bootstrap/fresh-chat regression.
+- Phase 1 Core implementation in the fork.
+- Provider-adapter bootstrap/fresh-chat regression — deferred, non-blocking maintenance.
 
 ### Verification Pending
 
-- ChatGPT Project FAST_CHAT / PROJECT_READ / PROJECT_WORK fresh-entry regression after the correct project bootstrap is installed.
+- Phase 1 implementation tests/acceptance for changed source surfaces.
+- Provider fresh-entry regression later; do not treat it as a current implementation blocker.
 
 ### Idempotency / Replay Notes
 
