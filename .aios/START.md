@@ -19,6 +19,14 @@ Canonical project-memory path: `.aios/`
 
 GitHub is the canonical persistent project-memory layer. Google Drive and ChatGPT Project Sources are non-authoritative unless this project explicitly records a separate source role.
 
+## Project Activation / Repository Visibility
+
+- Project lifecycle status: `PROVIDER_SETUP_REQUIRED`.
+- Required ChatGPT bootstrap: `2026.09.22.5`.
+- Canonical repository remains `thecravenfoodie-rgb/chat-on-steroids` even though it is public; this was intentionally accepted during initialization and must not be reopened solely because new dedicated AIOS repositories default to private.
+- Public visibility may be reconsidered only if newly admitted memory would expose secrets, credentials, private personal data, or other unapproved confidential material.
+- Repository memory may be `CURRENT / READY` while provider activation is incomplete. Only lifecycle `ACTIVE` means end-to-end initialized/ready.
+
 ## PROJECT_WORK / MAINTENANCE Preflight
 
 1. Read `.aios/MEMORY_SYNC.md`.
