@@ -1,6 +1,6 @@
 # STATE
 
-**Updated:** 2026-09-22 22:14 America/New_York
+**Updated:** 2026-09-22 23:36 America/New_York
 
 ## Goal
 
@@ -15,8 +15,10 @@ Build the Chat On Steroids fork into the AIOS execution/control layer, starting 
 - All 12 required `.aios/` records exist in live GitHub.
 - Product package metadata identifies `chat-on-steroids` version `2.1.14`.
 - The existing public repository is intentionally reused as canonical rather than creating a duplicate. That visibility decision is settled unless new confidentiality risk appears.
-- Project lifecycle status: `PROVIDER_SETUP_REQUIRED`. Repository memory is `CURRENT / READY`, but current ChatGPT Project Instructions still identify the central AI Project OS repository rather than this project's repository.
-- Required bootstrap version: `2026.09.22.5` with repository `thecravenfoodie-rgb/chat-on-steroids` and canonical path `.aios/`.
+- Repository memory is `CURRENT / READY` on `main:.aios/`.
+- Provider/bootstrap UI state is not currently re-verified; provider verification is deferred maintenance and does not block source implementation.
+- Required bootstrap contract remains `2026.09.22.5` for repository `thecravenfoodie-rgb/chat-on-steroids` / `.aios/` when that maintenance is resumed.
+- Canonical memory branch: `main`.
 - Product implementation branch: `aios/phase-1-core-integration`.
 - Live GitHub shows that branch at preserved baseline commit `750fad9378a0cf9e37791916b11f7ed9add645dd`; inspect the local worktree and prior implementation handoff before assuming work has not begun.
 - Current implementation intent is **build/modify the fork**, not download/install the upstream release.
@@ -39,6 +41,6 @@ Provider-adapter/bootstrap regression remains deferred maintenance. It does not 
 
 Resume Phase 1 implementation on `aios/phase-1-core-integration`.
 
-First inspect the current local Git branch/worktree and the existing Phase 1 worker/handoff evidence so no uncommitted or already-completed work is lost. Preserve any valid implementation already present. Then continue the next unfinished Phase 1 Core task in the fork and run the relevant tests.
+First inspect the current local Git branch/worktree. If prior Phase 1 worker/chat handoff evidence is available in the active execution environment, use it; otherwise derive the cursor from the branch/worktree and tests. Preserve any valid implementation already present. Then continue the next unfinished Phase 1 Core task in the fork and run the relevant tests.
 
 Do **not** download/install the stock CoS release as the next project step. Installation may be used later only when needed to test the modified build.
