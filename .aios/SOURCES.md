@@ -14,7 +14,7 @@
 
 - Repository: `thecravenfoodie-rgb/ai-project-os`
 - Branch: `main`
-- Governing initialization ref: `6ca314c3897060b66223b51078a61322f69732e3`
+- Governing initialization / activation ref: `d88e287eb75c505dbd81d20c8233baebda2173e7`
 - Defaults/package: `defaults/`
 - Existing-repository initializer: `Snippets/EXISTING_REPOSITORY_INITIALIZATION.md`
 - ChatGPT bootstrap: `Snippets/CHATGPT_PROJECT_BOOTSTRAP.md`
