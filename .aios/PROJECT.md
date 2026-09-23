@@ -9,15 +9,18 @@
 
 ## Purpose
 
-Provide durable GitHub-native AI Project OS memory for ChatGPT-assisted work on the Chat On Steroids software project.
+Build and evolve the owner's Chat On Steroids fork into the **AIOS execution/control layer**. Chat On Steroids is the runtime foundation to adapt and extend; installing or configuring the unmodified stock app is not the project objective.
 
-The live repository identifies Chat On Steroids as a local coding bridge/workspace for ChatGPT over MCP with local tools, terminal access, desktop control, and approved-folder capability limits.
+The target architecture keeps AI Project OS / Mission Control as the authority layer while Chat On Steroids supplies the local execution runtime: approved-file access, terminal/Git/test execution, worker/session continuity, and other bounded execution capabilities.
 
 ## Scope
 
+- **Current phase:** Phase 1 Core integration on branch `aios/phase-1-core-integration`.
+- Phase 1 focuses on the Core execution path and AIOS control contracts before broader Desktop/Plugins expansion.
+- Preserve useful upstream CoS behavior while adding AIOS-specific execution receipts, project identity protection, worker handoff/resume behavior, and lifecycle/control-plane hooks required by the Phase 1 design.
 - Canonical AI-assisted project memory lives under `.aios/`.
 - Executable/product source remains outside `.aios/` in this repository.
-- This ChatGPT Project coordinates work against the same verified repository.
+- Stock CoS installation/setup is not a substitute for implementing the fork.
 
 ## Architecture / Authority
 
@@ -40,4 +43,6 @@ The live repository identifies Chat On Steroids as a local coding bridge/workspa
 
 ## Definition of Done
 
-Requested work is complete only when it is actually implemented, verified on the authoritative execution surface as required, relevant `.aios/` memory is reconciled when durable truth changes, and unfinished work is explicitly recorded.
+Phase work is complete only when the intended AIOS execution-layer behavior is implemented in the fork, tests/verification appropriate to the changed surface pass, relevant `.aios/` memory is reconciled when durable truth changes, and unfinished work is explicitly recorded.
+
+Downloading or installing the upstream/stock Chat On Steroids release does not satisfy this project's implementation Definition of Done.
