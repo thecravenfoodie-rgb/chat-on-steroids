@@ -52,6 +52,30 @@
 **Supersedes:** None  
 **Superseded by:** None
 
+
+
+### 2026-09-22 — D-005 — Build the fork; do not substitute stock CoS installation
+
+**Status:** Active  
+**Decision:** This project's objective is to modify `thecravenfoodie-rgb/chat-on-steroids` into the AIOS execution/control layer. Installing or configuring the unmodified upstream Chat On Steroids release is not the project deliverable and must not replace source implementation.  
+**Context:** A work session drifted into downloading the upstream macOS release after reading project memory that overemphasized provider/setup state. The owner explicitly redirected the work back to building the fork.  
+**Rationale:** The fork exists to become an AIOS execution layer; stock installation tests a different objective.  
+**Consequences / Constraints:** Use installation/runtime setup only when genuinely needed to verify the modified build. Normal continuation begins from source/branch/worktree state and the Phase 1 implementation handoff.  
+**References:** `.aios/PROJECT.md`, `.aios/STATE.md`, branch `aios/phase-1-core-integration`.  
+**Supersedes:** None  
+**Superseded by:** None
+
+### 2026-09-22 — D-006 — Phase 1 is Core-first and provider regression is non-blocking
+
+**Status:** Active  
+**Decision:** Continue Phase 1 as a Core-first implementation of the AIOS execution layer. Provider/bootstrap fresh-chat regression remains truthful but deferred and must not block product implementation.  
+**Context:** The project needs forward implementation progress now; provider regression can be completed later without falsifying its status.  
+**Rationale:** Provider verification is lifecycle maintenance, not a dependency for editing/testing the fork's source.  
+**Consequences / Constraints:** Prioritize the Core execution path, identity/ownership protection, execution receipts, worker handoff/resume, and lifecycle/control integration. Broader Desktop/Plugins expansion stays outside the immediate Phase 1 path unless a concrete implementation dependency requires it. Do not mark provider verification complete without evidence.  
+**References:** `.aios/STATE.md`, `.aios/MEMORY_SYNC.md`.  
+**Supersedes:** None  
+**Superseded by:** None
+
 ## Admission Rule
 
 Record future decisions only when they materially affect execution, architecture, constraints, requirements, priorities, risk, or interpretation of project state.
