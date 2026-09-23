@@ -16,3 +16,12 @@ Provider-adapter setup/fresh-chat regression is not complete.
 ## Maintenance Rule
 
 Add an item only after the required outcome actually succeeded and was verified.
+
+
+### AIOS package 2026.09.22.5 repository-layer remediation
+
+- Upgraded project package compatibility to `2026.09.22.5` — 2026-09-22.
+- Recorded the already accepted public canonical repository and eliminated private-by-default as a reason to create/reopen a second repository — 2026-09-22.
+- Added explicit provider lifecycle state so repository readiness cannot masquerade as full Project activation — 2026-09-22.
+
+Provider bootstrap installation and fresh-chat regression remain incomplete and are not included in this completed item.
