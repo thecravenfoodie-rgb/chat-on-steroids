@@ -19,13 +19,17 @@ Canonical project-memory path: `.aios/`
 
 GitHub is the canonical persistent project-memory layer. Google Drive and ChatGPT Project Sources are non-authoritative unless this project explicitly records a separate source role.
 
-## Project Activation / Repository Visibility
+## Current Execution Directive
 
-- Project lifecycle status: `PROVIDER_SETUP_REQUIRED`.
-- Required ChatGPT bootstrap: `2026.09.22.5`.
-- Canonical repository remains `thecravenfoodie-rgb/chat-on-steroids` even though it is public; this was intentionally accepted during initialization and must not be reopened solely because new dedicated AIOS repositories default to private.
-- Public visibility may be reconsidered only if newly admitted memory would expose secrets, credentials, private personal data, or other unapproved confidential material.
-- Repository memory may be `CURRENT / READY` while provider activation is incomplete. Only lifecycle `ACTIVE` means end-to-end initialized/ready.
+- **Product objective:** build the Chat On Steroids fork into the AIOS execution/control layer.
+- **Active phase:** Phase 1 Core integration.
+- **Canonical memory branch:** `main`; authoritative project memory is `main:.aios/`.
+- **Active implementation branch:** `aios/phase-1-core-integration`.
+- Product/source commits belong on the implementation branch unless a later project decision changes that branch.
+- AIOS memory reconciliation belongs on `main:.aios/`; do not treat a feature branch's missing/stale `.aios/` copy as canonical.
+- Installing/downloading the unmodified upstream CoS release is **not** the next project step and is not a substitute for implementation.
+- Provider/bootstrap fresh-chat verification is deferred maintenance and **does not block Phase 1 source work**.
+- The existing public repository is intentionally canonical. Do not reopen repository visibility without new confidentiality evidence.
 
 ## PROJECT_WORK / MAINTENANCE Preflight
 
@@ -47,6 +51,6 @@ GitHub is the canonical persistent project-memory layer. Google Drive and ChatGP
 
 Follow canonical `SOPs/PROJECT_MEMORY_SYNC.md`. Routine persistence must not block an otherwise-ready answer. Use durable write-ahead only when correctness, safety, authorization, material external side effects, handoff/interruption safety, or replay protection requires it.
 
-## Provider Bootstrap
+## Deferred Provider Maintenance
 
-Use canonical `Snippets/CHATGPT_PROJECT_BOOTSTRAP.md` in ChatGPT Project Instructions with this repository and `.aios/` path.
+Provider/bootstrap verification remains pending and must stay truthful, but it is not part of the active Phase 1 implementation path. Run it only when explicitly resumed as maintenance. Do not let it displace product work.
