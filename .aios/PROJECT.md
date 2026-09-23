@@ -34,8 +34,9 @@ The live repository identifies Chat On Steroids as a local coding bridge/workspa
 - Branch: `main`
 - Product package: `chat-on-steroids`
 - Product version observed at initialization: `2.1.14`
-- Repository visibility observed at initialization: public
-- AIOS package version: `2026.09.22.4`
+- Repository visibility: public — intentionally accepted as the canonical existing repository. Public visibility is not an identity failure and must not be reopened solely because new dedicated AIOS repositories default to private.
+- Public `.aios/` exposure: reviewed for this package update; current project-memory records contain project metadata/governance state, not secrets or private credentials. Reassess only if future admitted memory would expose confidential material.
+- AIOS package version: `2026.09.22.5`
 
 ## Definition of Done
 
