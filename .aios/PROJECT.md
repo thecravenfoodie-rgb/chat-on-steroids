@@ -32,9 +32,12 @@ The target architecture keeps AI Project OS / Mission Control as the authority l
 - Chat history, uploads, Project Sources, saved memory, and Drive copies do not outrank live canonical GitHub state.
 - The verified existing repository is reused; no duplicate repository is created.
 
-## Repository Identity
+## Repository / Branch Roles
 
-- Branch: `main`
+- Canonical memory branch: `main`
+- Active implementation branch: `aios/phase-1-core-integration`
+- `.aios/` authority: `main:.aios/`
+- Product/source changes: implementation branch
 - Product package: `chat-on-steroids`
 - Product version observed at initialization: `2.1.14`
 - Repository visibility: public — intentionally accepted as the canonical existing repository. Public visibility is not an identity failure and must not be reopened solely because new dedicated AIOS repositories default to private.
