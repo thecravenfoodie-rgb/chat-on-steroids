@@ -30,3 +30,14 @@
 **Remaining boundary:** Project Instructions must still be updated on the ChatGPT Project UI surface and fresh-chat FAST_CHAT / PROJECT_READ / PROJECT_WORK regression must pass before lifecycle status can become `ACTIVE`.
 
 **Resume point:** Install the current bootstrap for this repository/path, then run fresh-chat provider regression. Do not reopen repository visibility absent new confidentiality evidence.
+
+
+### 2026-09-22 22:14 America/New_York — Project refocused on Phase 1 source implementation
+
+**Outcome:** Direction corrected.
+
+**What happened:** The active work session drifted into downloading/installing the upstream macOS Chat On Steroids release because project state still framed provider/setup work as the next action. The owner explicitly stopped that path and reaffirmed the actual project: build the Chat On Steroids fork into the AIOS execution/control layer.
+
+**Durable correction:** `.aios/PROJECT.md`, `.aios/STATE.md`, `.aios/DECISIONS.md`, and `.aios/RUN_CHECKPOINT.md` now make Phase 1 Core integration the active work. Stock-app installation is not the deliverable. Provider fresh-chat regression remains deferred/non-blocking and must stay truthfully pending.
+
+**Implementation resume point:** Branch `aios/phase-1-core-integration` exists and points to baseline `750fad9378a0cf9e37791916b11f7ed9add645dd` in live GitHub. Before coding, inspect the current local worktree and prior Phase 1 worker/handoff evidence so valid local work is not lost; then continue the next unfinished Core integration task and run relevant tests.
