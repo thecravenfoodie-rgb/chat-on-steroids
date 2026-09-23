@@ -17,3 +17,16 @@
 **Resume point:** Configure the project-scoped bootstrap, then run fresh-chat provider regression.
 
 **References:** `thecravenfoodie-rgb/ai-project-os@6ca314c3897060b66223b51078a61322f69732e3`; package `2026.09.22.4`; identity commit `ed66786bad16cbc393af81ab0d0213ef224ef8bb`.
+
+
+### 2026-09-22 21:42 America/New_York — Package 2026.09.22.5 activation/visibility remediation
+
+**Outcome:** Repository/package update success; provider activation still pending.
+
+**What happened:** Upgraded this project's AIOS compatibility from `2026.09.22.4` to `2026.09.22.5`. Recorded the already-settled decision that the existing public `thecravenfoodie-rgb/chat-on-steroids` repository remains canonical and must not be re-questioned solely because new repositories default to private. Added the end-to-end lifecycle distinction between repository readiness and provider activation.
+
+**Verification / evidence:** Live canonical AIOS package `2026.09.22.5` contains SA-36 / SA-37 and OSG-016 / OSG-017. Project records now identify lifecycle `PROVIDER_SETUP_REQUIRED`, required bootstrap `2026.09.22.5`, and the accepted public canonical repository.
+
+**Remaining boundary:** Project Instructions must still be updated on the ChatGPT Project UI surface and fresh-chat FAST_CHAT / PROJECT_READ / PROJECT_WORK regression must pass before lifecycle status can become `ACTIVE`.
+
+**Resume point:** Install the current bootstrap for this repository/path, then run fresh-chat provider regression. Do not reopen repository visibility absent new confidentiality evidence.
