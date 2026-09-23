@@ -27,17 +27,17 @@ Repository visibility is settled unless new confidentiality evidence appears. Me
 
 ## Current Cursor
 
-**ACTIVITY_CURSOR:** 2  
-**LAST_ACTIVITY_AT:** 2026-09-22 21:45 America/New_York  
+**ACTIVITY_CURSOR:** 3  
+**LAST_ACTIVITY_AT:** 2026-09-22 22:14 America/New_York  
 **LAST_ACTIVITY_BY:** Chief of Staff / ChatGPT with GitHub connector  
-**LAST_ACTIVITY_SOURCE:** AIOS package 2026.09.22.5 activation/visibility remediation  
-**ACTIVITY_SUMMARY:** Upgraded the project to AIOS package `2026.09.22.5`, recorded the accepted public canonical repository as durable truth, and added explicit provider lifecycle state so repository readiness cannot masquerade as end-to-end activation.
+**LAST_ACTIVITY_SOURCE:** Phase 1 project-direction correction  
+**ACTIVITY_SUMMARY:** Corrected project memory so active work is Phase 1 source implementation of the AIOS execution/control layer in the Chat On Steroids fork. Stock-app installation is explicitly not the deliverable; provider regression is deferred and non-blocking.
 
-**RECONCILIATION_CURSOR:** 2  
-**LAST_RECONCILED_AT:** 2026-09-22 21:45 America/New_York  
+**RECONCILIATION_CURSOR:** 3  
+**LAST_RECONCILED_AT:** 2026-09-22 22:14 America/New_York  
 **LAST_RECONCILED_BY:** Chief of Staff / ChatGPT with GitHub connector  
-**LAST_RECONCILED_TARGETS:** `.aios/START.md`, `.aios/PROJECT.md`, `.aios/STATE.md`, `.aios/DECISIONS.md`, `.aios/SOURCES.md`, `.aios/CHANGELOG.md`, `.aios/COMPLETED.md`, `.aios/PACKAGE_SYNC.md`, and this `.aios/MEMORY_SYNC.md`  
-**LAST_RECONCILIATION_VERIFICATION:** Live GitHub re-read confirmed package `2026.09.22.5`, lifecycle `PROVIDER_SETUP_REQUIRED`, bootstrap requirement `2026.09.22.5`, and repository visibility `PUBLIC_ACCEPTED` in `thecravenfoodie-rgb/chat-on-steroids`. Provider UI configuration is intentionally not claimed complete.
+**LAST_RECONCILED_TARGETS:** `.aios/PROJECT.md`, `.aios/STATE.md`, `.aios/DECISIONS.md`, `.aios/RUN_CHECKPOINT.md`, `.aios/CHANGELOG.md`, and this `.aios/MEMORY_SYNC.md`  
+**LAST_RECONCILIATION_VERIFICATION:** Phase 1 direction correction was written to the canonical `thecravenfoodie-rgb/chat-on-steroids/.aios/` records; final live re-read follows this reconciliation. Provider verification remains intentionally pending and is not claimed complete.
 
 ## Pending Writeback
 
@@ -48,7 +48,7 @@ Repository visibility is settled unless new confidentiality evidence appears. Me
 ## Portability Check
 
 **PORTABILITY_STATUS:** `READY`  
-**PORTABILITY_NOTE:** Canonical project truth is stored in `thecravenfoodie-rgb/chat-on-steroids/.aios/` on package `2026.09.22.5`. The existing public repository is intentionally canonical. Provider bootstrap remains `PROVIDER_SETUP_REQUIRED`; Project Instructions must be updated before fresh-chat regression and lifecycle `ACTIVE`.
+**PORTABILITY_NOTE:** Canonical project truth is stored in `thecravenfoodie-rgb/chat-on-steroids/.aios/` on package `2026.09.22.5`. Active project work is Phase 1 Core implementation in the fork; stock-app installation is not the deliverable. Provider bootstrap/regression remains pending but does not block source implementation.
 
 ## Status Meanings
 
