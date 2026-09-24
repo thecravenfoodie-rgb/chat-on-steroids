@@ -9,7 +9,7 @@
 
 ## Purpose
 
-Build and evolve the owner's Chat On Steroids fork into the **AIOS execution/control layer**. Chat On Steroids is the runtime foundation to adapt and extend; installing or configuring the unmodified stock app is not the project objective.
+Build and evolve the owner's fork into the **AIOS execution/control layer**. The current visible product brand is **Sidecar**; the repository/package technical identity remains `chat-on-steroids` for compatibility. The existing codebase is the runtime foundation to adapt and extend; installing or configuring the unmodified upstream app is not the project objective.
 
 The target architecture keeps AI Project OS / Mission Control as the authority layer while Chat On Steroids supplies the local execution runtime: approved-file access, terminal/Git/test execution, worker/session continuity, and other bounded execution capabilities.
 
@@ -39,6 +39,9 @@ The target architecture keeps AI Project OS / Mission Control as the authority l
 - `.aios/` authority: `main:.aios/`
 - Product/source changes: implementation branch
 - Product package: `chat-on-steroids`
+- Visible product brand: **Sidecar**
+- Published connector names: **Sidecar Core**, **Sidecar Desktop**, **Sidecar Plugins**
+- Compatibility identities intentionally retained: repository/package slug `chat-on-steroids`, app id `com.chatonsteroids.app`, MCP server ids `chat-on-steroids-*`, browser wire id `chat-on-steroids`, existing storage/userData keys, and native/internal `cos` names
 - Product version observed at initialization: `2.1.14`
 - Repository visibility: public — intentionally accepted as the canonical existing repository. Public visibility is not an identity failure and must not be reopened solely because new dedicated AIOS repositories default to private.
 - Public `.aios/` exposure: reviewed for this package update; current project-memory records contain project metadata/governance state, not secrets or private credentials. Reassess only if future admitted memory would expose confidential material.
