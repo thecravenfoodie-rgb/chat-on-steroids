@@ -4,6 +4,19 @@
 
 ## Journal
 
+### 2026-09-24 08:17 America/New_York — Sidecar visible-brand migration prepared and validated
+
+**Outcome:** Source migration complete in the local implementation worktree; not yet committed, installed, or published.
+
+**What happened:** Renamed current user-facing app, extension, connector, renderer, setup, documentation, locale, packaging, and release-artifact surfaces from Chat On Steroids to **Sidecar**. New connector display names are **Sidecar Core**, **Sidecar Desktop**, and **Sidecar Plugins**. Compatibility-sensitive technical identifiers remain unchanged, and the browser companion accepts previous connector display names for historical conversation attribution.
+
+**Release/update correction:** Future Sidecar release assets and update lookup now target the canonical fork `thecravenfoodie-rgb/chat-on-steroids`. The fork currently has no Sidecar binary release; a missing latest release is handled as "no update" instead of allowing an upstream release to overwrite the renamed product.
+
+**Verification / evidence:** `git diff --check` passed. Focused rename-sensitive validation passed 1,108 tests with 9 skipped. Shell namespace follow-up passed 95 tests. The macOS native window-matching probe passed in isolation and in the final full run. Final `npm run verify` passed 5,772 tests with 129 skipped across both phases, and `npm run build` succeeded.
+
+**Boundary / resume point:** No package was installed, no release was published, and the product branch was not committed in this work unit. The currently running connector may continue to show its old installed name until a Sidecar build is run and the ChatGPT connector is refreshed or recreated. Phase 1 Core integration remains the active product-development track.
+
+
 ### 2026-09-22 19:37 America/New_York — GitHub-native AIOS initialization
 
 **Outcome:** Success
