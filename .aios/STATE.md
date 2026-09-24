@@ -1,6 +1,6 @@
 # STATE
 
-**Updated:** 2026-09-22 23:36 America/New_York
+**Updated:** 2026-09-24 08:17 America/New_York
 
 ## Goal
 
@@ -14,6 +14,12 @@ Build the Chat On Steroids fork into the AIOS execution/control layer, starting 
 - Governing AIOS ref used for initialization: `6ca314c3897060b66223b51078a61322f69732e3`
 - All 12 required `.aios/` records exist in live GitHub.
 - Product package metadata identifies `chat-on-steroids` version `2.1.14`.
+- Owner-selected visible product brand: **Sidecar**. Published connector names are **Sidecar Core**, **Sidecar Desktop**, and **Sidecar Plugins**.
+- Compatibility-sensitive technical identities remain unchanged by design: repository/package slug `chat-on-steroids`, app id `com.chatonsteroids.app`, MCP server ids `chat-on-steroids-*`, browser wire id `chat-on-steroids`, existing storage/userData keys, and native/internal `cos` names.
+- The local `aios/phase-1-core-integration` worktree contains the Sidecar branding migration across app/extension/connectors/docs/locales/packaging/release metadata. Previous connector display names remain accepted as transitional read compatibility for existing conversations.
+- Update/release lookup now targets the canonical fork `thecravenfoodie-rgb/chat-on-steroids`; no Sidecar binary release exists in the fork yet, and a missing latest release is treated as "no update" rather than falling back to upstream.
+- Branding migration validation passed: `npm run verify` completed with 5,772 tests passed and 129 skipped across both phases, and `npm run build` succeeded.
+- The Sidecar source migration is not yet committed, installed, or published; the currently running connector may therefore continue to show its previous installed display name until a Sidecar build is run and the connector is refreshed/recreated.
 - The existing public repository is intentionally reused as canonical rather than creating a duplicate. That visibility decision is settled unless new confidentiality risk appears.
 - Repository memory is `CURRENT / READY` on `main:.aios/`.
 - Provider/bootstrap UI state is not currently re-verified; provider verification is deferred maintenance and does not block source implementation.
@@ -39,8 +45,8 @@ Provider-adapter/bootstrap regression remains deferred maintenance. It does not 
 
 ## Next Executable Action
 
-Resume Phase 1 implementation on `aios/phase-1-core-integration`.
+The Sidecar branding migration is prepared and fully validated in the local `aios/phase-1-core-integration` worktree. Review/commit that implementation when the owner wants it made durable on the product branch; do not publish or install merely to complete the source-editing task.
 
-First inspect the current local Git branch/worktree. If prior Phase 1 worker/chat handoff evidence is available in the active execution environment, use it; otherwise derive the cursor from the branch/worktree and tests. Preserve any valid implementation already present. Then continue the next unfinished Phase 1 Core task in the fork and run the relevant tests.
+When runtime verification of the new visible name is desired, run/install the modified Sidecar build and refresh or recreate the ChatGPT connectors so their provider-visible names become Sidecar Core/Desktop/Plugins. Preserve the compatibility identities listed above.
 
-Do **not** download/install the stock CoS release as the next project step. Installation may be used later only when needed to test the modified build.
+Phase 1 Core integration remains the active product-development track after this branding checkpoint.
