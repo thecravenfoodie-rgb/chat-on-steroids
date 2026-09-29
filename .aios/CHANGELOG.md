@@ -4,6 +4,16 @@
 
 ## Journal
 
+### 2026-09-29 12:54 America/New_York — Sidecar branding decision reversed
+
+**Outcome:** Canonical project direction restored to **Chat On Steroids**; local source cleanup remains pending.
+
+**What changed:** The owner reversed D-007. The visible product and connector names are again **Chat On Steroids**, **Chat On Steroids Core**, **Chat On Steroids Desktop**, and **Chat On Steroids Plugins**.
+
+**Important boundary:** The 2026-09-24 Sidecar source migration was recorded as local, uncommitted, not installed, and not published. No claim is made that those local edits have already been removed.
+
+**Next execution step:** Use Chat On Steroids Core to inspect the local `aios/phase-1-core-integration` diff and selectively revert Sidecar-only branding and release/update edits while preserving unrelated Phase 1 implementation. Verify the resulting diff and tests/build before reconciling completion.
+
 ### 2026-09-24 08:17 America/New_York — Sidecar visible-brand migration prepared and validated
 
 **Outcome:** Source migration complete in the local implementation worktree; not yet committed, installed, or published.
