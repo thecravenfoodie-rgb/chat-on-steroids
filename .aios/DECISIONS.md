@@ -79,13 +79,25 @@
 
 ### 2026-09-24 — D-007 — Use Sidecar as the visible product brand while preserving compatibility identities
 
-**Status:** Active  
+**Status:** Superseded  
 **Decision:** Rename the visible product to **Sidecar** and publish its model-facing connectors as **Sidecar Core**, **Sidecar Desktop**, and **Sidecar Plugins**. Preserve the existing repository/package slug, app id, MCP server ids, browser wire id, storage/userData keys, and native/internal `cos` identifiers unless a later migration provides an explicit compatibility path.  
 **Context:** The owner no longer wants the product associated by name with ChatGPT or “steroids.” A visible-only rename can remove that association without orphaning settings, permissions, stored state, historical conversations, or transport identities.  
 **Rationale:** Branding and compatibility identity are separate concerns. Renaming user-visible surfaces now delivers the desired product identity while avoiding unnecessary breakage in mature internal contracts.  
 **Consequences / Constraints:** Existing conversations continue to recognize the prior connector display names as transitional read compatibility, but new publication uses Sidecar names. Future release artifacts use `Sidecar-*`. Update/release lookup targets the canonical fork and must not fall back to upstream Chat On Steroids releases. Original copyright attribution remains intact where legally relevant. A deeper rename of technical identifiers requires its own migration plan and is not implied by the brand change.  
 **References:** local worktree on `aios/phase-1-core-integration`; `docs/worklog-2026-09-24-sidecar-brand-migration.md`.  
 **Supersedes:** None  
+**Superseded by:** D-008
+
+
+### 2026-09-29 — D-008 — Restore Chat On Steroids as the visible product brand
+
+**Status:** Active  
+**Decision:** Restore **Chat On Steroids** as the visible product brand and use **Chat On Steroids Core**, **Chat On Steroids Desktop**, and **Chat On Steroids Plugins** as the published connector names. The Sidecar rename is abandoned.  
+**Context:** The owner reversed the 2026-09-24 branding decision before the Sidecar source migration was committed, installed, or published.  
+**Rationale:** Returning to the original product identity removes an unnecessary compatibility and maintenance layer. Because the Sidecar source work remained local and uncommitted, the safe implementation is a selective cleanup rather than a repository-wide identity migration.  
+**Consequences / Constraints:** Preserve the existing repository/package slug, app id, MCP server ids, browser wire id, storage/userData keys, native/internal `cos` identifiers, and all unrelated Phase 1 work. Selectively revert Sidecar-only app/extension/connector/docs/locale/packaging/release edits and Sidecar-only update/release behavior from the local implementation worktree. Do not reset the entire worktree.  
+**References:** D-007; local `aios/phase-1-core-integration` worktree; 2026-09-24 Sidecar migration record.  
+**Supersedes:** D-007  
 **Superseded by:** None
 
 ## Admission Rule
