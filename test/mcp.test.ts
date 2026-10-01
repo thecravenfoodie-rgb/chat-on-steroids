@@ -2512,6 +2512,47 @@ describe('exec_command and write_stdin', () => {
     getConfig().commandAllowlist = { enabled: false, mode: 'allow', rules: [] };
   });
 
+  it('uses Core terminal for scoped Git evidence and a safe integration-branch fixture commit', async () => {
+    const repo = path.join(approved, 'git-fixture');
+    await fs.mkdir(repo);
+    await fs.writeFile(path.join(repo, 'fixture.txt'), 'before\n', 'utf8');
+
+    // Retain the Phase 1 regression using the current single-command exec contract.
+    // Every operation stays inside this test's approved disposable repository.
+    const git = async (cmd: string) => {
+      const reply = await core('tools/call', {
+        name: 'exec_command',
+        arguments: { cmd, workdir: '/workspace/git-fixture', yield_time_ms: 5_000 }
+      });
+      expect(failed(reply), textOf(reply)).toBe(false);
+      expect(reply.body.result?.structuredContent?.exit_code).toBe(0);
+      return String(reply.body.result?.structuredContent?.output ?? '');
+    };
+
+    await git('git init -b aios/phase-1-core-integration .');
+    await git('git config user.name "Core integration fixture"');
+    await git('git config user.email "core-fixture@example.invalid"');
+    await git('git add -- fixture.txt');
+    await git('git commit -m "test: create isolated Core Git fixture"');
+    expect((await git('git branch --show-current')).trim()).toBe('aios/phase-1-core-integration');
+    const beforeHead = (await git('git rev-parse HEAD')).trim();
+    expect(beforeHead).toMatch(/^[0-9a-f]{40}$/);
+
+    await fs.writeFile(path.join(repo, 'fixture.txt'), 'after\n', 'utf8');
+    expect(await git('git status --short')).toContain(' M fixture.txt');
+    const diff = await git('git diff -- fixture.txt');
+    expect(diff).toContain('-before');
+    expect(diff).toContain('+after');
+    await git('git add -- fixture.txt');
+    await git('git commit -m "test: verify Core terminal Git flow"');
+    const afterHead = (await git('git rev-parse HEAD')).trim();
+    expect(afterHead).toMatch(/^[0-9a-f]{40}$/);
+    expect(afterHead).not.toBe(beforeHead);
+    expect((await git('git branch --show-current')).trim()).toBe('aios/phase-1-core-integration');
+    expect((await git('git status --porcelain')).trim()).toBe('');
+    expect(await fs.readFile(path.join(repo, 'fixture.txt'), 'utf8')).toBe('after\n');
+  });
+
   it('enforces the same optional policy at the shared handler before process launch', async () => {
     const command = IS_WINDOWS ? 'Write-Output allowlist-ok' : "printf '%s\\n' allowlist-ok";
     getConfig().commandAllowlist = { enabled: true, mode: 'allow', rules: [command] };

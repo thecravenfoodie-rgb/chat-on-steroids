@@ -4,7 +4,7 @@
 **Canonical repository:** `thecravenfoodie-rgb/chat-on-steroids`  
 **Canonical path:** `.aios/`  
 **Observability mode:** `MODEL_GOVERNED`  
-**Memory status:** `CURRENT`
+**Memory status:** `DIRTY`
 
 ## Project Lifecycle
 
@@ -27,11 +27,11 @@ Repository visibility is settled unless new confidentiality evidence appears. Me
 
 ## Current Cursor
 
-**ACTIVITY_CURSOR:** 5  
-**LAST_ACTIVITY_AT:** 2026-09-29 12:54 America/New_York  
-**LAST_ACTIVITY_BY:** ChatGPT with GitHub connector  
-**LAST_ACTIVITY_SOURCE:** Sidecar branding reversal  
-**ACTIVITY_SUMMARY:** Owner reversed the Sidecar branding decision. Canonical project direction now restores Chat On Steroids / Chat On Steroids Core/Desktop/Plugins as the visible names. The previously prepared Sidecar source migration remains local and uncommitted until Chat On Steroids Core selectively removes those edits.
+**ACTIVITY_CURSOR:** 6
+**LAST_ACTIVITY_AT:** 2026-10-01 America/New_York
+**LAST_ACTIVITY_BY:** Codex
+**LAST_ACTIVITY_SOURCE:** Owner-authorized clean-reset reconciliation
+**ACTIVITY_SUMMARY:** Prepared a local upstream 2.1.23 reconciliation candidate, preserved prior work, and adapted the retained Core Git regression. Validation and separate source-publication approval remain pending.
 
 **RECONCILIATION_CURSOR:** 5  
 **LAST_RECONCILED_AT:** 2026-09-29 12:54 America/New_York  
@@ -41,9 +41,13 @@ Repository visibility is settled unless new confidentiality evidence appears. Me
 
 ## Pending Writeback
 
-**PENDING_TARGETS:** None  
-**PENDING_REASON:** None  
-**PENDING_SINCE:** None
+**PENDING_TARGETS:** Reviewed clean-reset reconciliation and its project records, proposed for canonical `main`
+**PENDING_REASON:** Local candidate requires validation and separate owner approval before publication; the canonical repository remains unchanged
+**PENDING_SINCE:** 2026-10-01
+
+## Local Candidate Activity
+
+The owner authorized implementation of D-009. Upstream 2.1.23 has been merged into the local reconciliation branch and the intentional Core Git test adapted. Original source trees, installed app, and working Core registration remain intact. These candidate records do not assert canonical publication, installation, cutover, or acceptance completion.
 
 ## Portability Check
 

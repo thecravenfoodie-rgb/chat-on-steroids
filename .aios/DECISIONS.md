@@ -100,6 +100,16 @@
 **Supersedes:** D-007  
 **Superseded by:** None
 
+### 2026-10-01 — D-009 — Clean reset from reconciled canonical 2.1.23 source
+
+**Status:** Active
+**Decision:** Reconcile canonical main with pinned upstream 2.1.23 (`26d46e0207674a6bbdad864b17787b3538f60492`) on a review branch, preserve all canonical `.aios/` records, retain/adapt the intentional Phase 1 Core Git regression, and archive other local patches without importing them. Build the fresh installation from the resulting approved canonical revision.
+**Context:** The owner stopped patch-by-patch recovery and rejected leaving canonical source and the installed upstream binary intentionally different.
+**Consequences / Constraints:** Validate the reconciliation branch and present the exact diff before separate publication approval. Preserve the working Core registration until the fresh runtime passes build, installation, startup, and local verification; Core removal/reconnection requires its own approval. Quarantined repositories, acceptance environments, installers, app-data backups, and the rollback snapshot remain until full end-to-end acceptance including restart and post-restart attribution, followed by final deletion approval. Restore user state selectively; preserve unrelated files and canonical public visibility.
+**References:** Owner-approved clean-reset plan and subsequent approval-gate amendments.
+**Supersedes:** The previous immediate local-cleanup/resume directive for the duration of this maintenance; D-001 through D-006 and D-008 retain their underlying project/identity constraints.
+**Superseded by:** None
+
 ## Admission Rule
 
 Record future decisions only when they materially affect execution, architecture, constraints, requirements, priorities, risk, or interpretation of project state.

@@ -64,3 +64,12 @@
 **Durable correction:** `.aios/PROJECT.md`, `.aios/STATE.md`, `.aios/DECISIONS.md`, and `.aios/RUN_CHECKPOINT.md` now make Phase 1 Core integration the active work. Stock-app installation is not the deliverable. Provider fresh-chat regression remains deferred/non-blocking and must stay truthfully pending.
 
 **Implementation resume point:** Branch `aios/phase-1-core-integration` exists and points to baseline `750fad9378a0cf9e37791916b11f7ed9add645dd` in live GitHub. Before coding, inspect the current local worktree and prior Phase 1 worker/handoff evidence so valid local work is not lost; then continue the next unfinished Core integration task and run relevant tests.
+
+
+### 2026-10-01 America/New_York — Clean-reset reconciliation candidate
+
+**Outcome:** Local candidate prepared; publication and runtime gates remain pending.
+
+**What happened:** Reconciled canonical baseline `e63c4f7` with pinned upstream 2.1.23 `26d46e0` without conflicts. Preserved canonical project records and adapted the intentional Phase 1 Core terminal/Git regression. Other local patches remain excluded and privately preserved.
+
+**Boundary:** No canonical-main update, installed-app replacement, Core cutover, or permanent cleanup is claimed. Validation evidence and the exact diff must be presented before source-publication approval; subsequent approval gates remain independent. Phase 1 implementation and provider activation remain unfinished.

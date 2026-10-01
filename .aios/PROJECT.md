@@ -15,7 +15,8 @@ The target architecture keeps AI Project OS / Mission Control as the authority l
 
 ## Scope
 
-- **Current phase:** Phase 1 Core integration on branch `aios/phase-1-core-integration`.
+- **Current maintenance:** clean reset from an upstream 2.1.23 reconciliation candidate on `reconcile/upstream-2.1.23-clean-reset`, subject to separate publication, installation, Core cutover, and final cleanup approvals.
+- **Underlying product phase:** Phase 1 Core integration remains unfinished on `aios/phase-1-core-integration`; the reset does not complete that phase.
 - Phase 1 focuses on the Core execution path and AIOS control contracts before broader Desktop/Plugins expansion.
 - Preserve useful upstream CoS behavior while adding AIOS-specific execution receipts, project identity protection, worker handoff/resume behavior, and lifecycle/control-plane hooks required by the Phase 1 design.
 - Canonical AI-assisted project memory lives under `.aios/`.
@@ -37,7 +38,7 @@ The target architecture keeps AI Project OS / Mission Control as the authority l
 - Canonical memory branch: `main`
 - Active implementation branch: `aios/phase-1-core-integration`
 - `.aios/` authority: `main:.aios/`
-- Product/source changes: implementation branch
+- Product/source changes: implementation branch; the owner-authorized clean-reset reconciliation is the explicit exception, proposed for reviewed integration into `main`.
 - Product package: `chat-on-steroids`
 - Visible product brand: **Chat On Steroids**
 - Published connector names: **Chat On Steroids Core**, **Chat On Steroids Desktop**, **Chat On Steroids Plugins**

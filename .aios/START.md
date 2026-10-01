@@ -21,6 +21,9 @@ GitHub is the canonical persistent project-memory layer. Google Drive and ChatGP
 
 ## Current Execution Directive
 
+- **Current maintenance override (D-009):** prepare and validate `reconcile/upstream-2.1.23-clean-reset`, then stop at the separate source-publication approval gate. Build the installation from approved canonical source; keep the current app/Core intact until their respective approval and verification gates. No permanent cleanup before full restart-inclusive acceptance and final approval.
+- This owner-approved maintenance temporarily precedes the Phase 1 resume instructions below; it does not claim Phase 1 or provider activation complete.
+
 - **Product objective:** build the Chat On Steroids fork into the AIOS execution/control layer.
 - **Active phase:** Phase 1 Core integration.
 - **Canonical memory branch:** `main`; authoritative project memory is `main:.aios/`.
