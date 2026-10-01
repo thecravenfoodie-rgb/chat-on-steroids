@@ -10,7 +10,7 @@ Read the [responsible-use notice and provider rules](../README.md#responsible-us
 
 1. **Install and open CoS.** Choose the download for your operating system and CPU.
 2. **Choose what ChatGPT may access.** In **Settings → Workspace**, approve a project folder and review the tool permissions.
-3. **Connect the local tools.** Configure a tunnel in **Settings → Setup**, press **Connect**, then add the **Core** app in ChatGPT's Developer mode.
+3. **Connect the local tools.** Configure a tunnel in **Settings → Setup**, press **Connect**, then add the **Core** app in ChatGPT under **Plugins → Add → Create MCP App**.
 4. **Load the companion extension.** Press **Open extension folder**. In `chrome://extensions`, enable Developer mode, choose **Load unpacked** and select that folder. Pairing is automatic.
 5. **Start a task.** Choose a project and model in CoS, write your request and send it.
 
@@ -25,7 +25,10 @@ Want screen and keyboard control? Enable **Desktop** permissions and connect its
 1. Create a tunnel in [Platform → Tunnels](https://platform.openai.com/settings/organization/tunnels), in the same workspace you use in ChatGPT.
 2. Create a **Restricted** [API key](https://platform.openai.com/settings/organization/api-keys) with **Tunnels: Read** and **Tunnels: Use**.
 3. Enter the tunnel ID and key in CoS and press **Connect**.
-4. In ChatGPT, enable Developer mode under **Settings → Apps → Advanced settings**, then create a custom app of type **Tunnel**. Review and enable its actions.
+4. In ChatGPT, open [Plugins](https://chatgpt.com/plugins), click **Add** at the top right and choose **Create MCP App**. Pick **Tunnel** as the connection, select your tunnel and choose **No authentication**. Older ChatGPT versions instead need Developer mode turned on first (**Settings → Security and login**) and show a **+** button. Review and enable the app's actions.
+5. Name each app exactly as CoS shows it (for example `Chat On Steroids Core`). CoS recognizes its tool calls by that name; a renamed app still works, but its calls are filed under Unattributed activity instead of your chat, which also keeps Goal and Loop from seeing them.
+
+> **No Developer mode switch?** That's expected. Current ChatGPT accounts, including new Plus accounts, create the app from **Plugins → Add → Create MCP App** without it, and file edits and desktop control work as before ([#522](https://github.com/totec448-spec/chat-on-steroids/issues/522)).
 
 Core, Desktop and Plugins are separate connectors. Configure each surface you enable. Release packages include the pinned, checksum-verified `tunnel-client`.
 
@@ -51,6 +54,43 @@ The dropdown is disabled and explains the override; unrelated Settings changes r
 Remove the override from the launch environment and restart CoS to use this selector. The existing
 comma-separated override and port `0` remain available for isolated development/tests.
 
+## Local control API
+
+**Settings → Setup → Advanced → Local control API** (off by default) lets an agent running on
+this computer check on CoS, and read its chats, from outside the app. It is meant for an agent's
+MCP server that watches for a hung app. **Turning it on lets any process that can read your user
+data folder read your chat history**, including messages, tool arguments and results, and queued
+messages. Known credential shapes are masked and long text is cut, but nothing else is filtered.
+When it is on, CoS writes two files to `control-api/` in its user data folder:
+
+- `endpoint.json`: port, process id and version;
+- `token`: a new random bearer token each time the app starts.
+
+It then serves these routes on `127.0.0.1` only:
+
+- `GET /v1/health`: process id, version, uptime, and the routes this build serves;
+- `GET /v1/status`: connection, bridge, plugins, updater and in-flight tool calls;
+- `GET /v1/sessions` (up to 50 per page, `cursor`) and `GET /v1/sessions/{id}` (`live=1` adds what the app is doing or waiting for in that chat: the running turn, the deadlines it is holding and the compaction it is in or has just finished): recorded chats;
+- `GET /v1/sessions/{id}/events` (up to 100 per page, `kinds`, `before`/`after` by each event's `position`, or `from` by `seq` to follow a chat live): messages, tool calls and turns, with message text cut at 4,000 characters and tool text at 2,000;
+- `GET /v1/inputs` (`state`, `limit`): the message outbox;
+- `GET /v1/agents`: the multi-agent run;
+- `GET /v1/log` (`limit`, `level`, `since`, inclusive): the in-memory Activity log.
+
+With a second switch, **Allow actions: let local agents send and cancel messages** (off by default,
+off whenever the API is off, and left off when you turn the API back on), it also serves:
+
+- `POST /v1/inputs` with `{ "id": "<new lowercase UUID>", "sessionId": "...", "text": "..." }` (up to 64,000 characters) sends a message to an existing chat through the same outbox as the composer. Like the composer it connects CoS and opens the chat in your browser. It answers 202 once the message is stored; whether ChatGPT received it is read later from `GET /v1/inputs` (`delivery`: `sent`, `not_sent`, `unconfirmed` or `pending`). Repeating an id returns the same message and does not send it again, but the outbox keeps only the last 50 finished messages (fewer when they are very large), so use a new UUID for each message. After a timeout, read `GET /v1/inputs` before sending again. A chat takes one message at a time, and if ChatGPT is writing an answer that the send would stop, the request is refused unless it also says `"interrupt": true`. Worker and helper chats cannot be sent to;
+- `POST /v1/inputs/{id}/cancel` withdraws a message that has not been handed to ChatGPT. It refuses a message that was delivered, one whose Send was already authorized (it may be in ChatGPT), the first message of a new chat, a message paired with another, and a message of a worker or helper chat.
+
+**Anyone who can read your user data folder and has this switch on can write into your chats, and
+a model that reads those messages can act under the permissions you have granted.**
+With the switch off, these routes all answer 403 and nothing changes.
+
+Requests need `Authorization: Bearer <token>`. Any request with a browser `Origin` is refused.
+A read that waits on something the app cannot answer within 15 seconds gets `504 timeout`, and `/v1/health` keeps answering (within the same rate limit), so a caller can tell an app that is waiting from one that is not running. An app frozen outright answers nothing.
+Turning the switch off, or quitting, stops the listener and removes both files. A crash can leave
+them behind, so a caller should treat a refused connection as "not running".
+
 ## Permissions and connectors
 
 | Connector | What it adds |
@@ -69,7 +109,7 @@ History is stored locally, with recording on and 30-day retention by default. Cr
 
 **Session history** belongs to the local session, not a particular ChatGPT tab. The companion records messages and the actual local tool results so the app and the model can read earlier work.
 
-**Compact & Resume** asks for a handoff, starts a fresh provider conversation and rebinds that same session. Task and worker history move with it. Automatic compaction uses configured local estimates and eligible live work; Pro models never auto-compact.
+**Compact & Resume** asks for a handoff, starts a fresh provider conversation and rebinds that same session. Task and worker history move with it. In Settings → Continuation prompts, **Handoff prompt** controls what the brief emphasizes; the continuation marker and recovery/provenance framing remain fixed. The shipped prompt prefers a dense roughly 2,000-6,000-token brief for substantial work instead of replaying completed chronology. Automatic compaction uses configured local estimates and eligible live work; Pro models never auto-compact.
 
 **Workers** keep their conversation when they finish. Send a follow-up to reuse one. The default is two simultaneous workers per family, configurable up to eight. Idle owned tabs can be reused or closed after fresh checks; the durable worker history remains. Drafts, active work and pins are protected.
 

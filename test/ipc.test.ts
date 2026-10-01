@@ -8,6 +8,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
 
 type Handler = (event: unknown, payload: unknown) => Promise<unknown>;
 const handlers = new Map<string, Handler>();
@@ -32,7 +33,7 @@ vi.mock('electron', () => ({
 }));
 
 // This suite owns IPC behavior, not Electron's packaged-vs-checkout path discovery.
-vi.mock('../src/main/extension-path.js', () => ({ extensionDir: () => process.cwd() }));
+vi.mock('../src/main/extension-path.js', () => ({ extensionDir: () => process.cwd(), shippedExtensionBuild: () => null, extensionUpdateOffer: () => null, prepareExtensionUpdate: () => null }));
 vi.mock('../src/main/browser.js', () => ({ openInPreferredBrowser: vi.fn(async () => 'chrome.exe') }));
 
 const { defaultConfig, getConfig, initConfigPath, saveConfig } = await import('../src/main/config.js');
@@ -253,6 +254,56 @@ it('publishes Goal draft progress through the session refresh channel without a 
   }
 });
 
+it('publishes the exact transcript owners of one recorder burst and an explicit global invalidation', async () => {
+  const { recordNote } = await import('../src/main/session/recorder.js');
+  const first = await createSession({ title: 'Changed A', conversationId: 'ipc-changed-a' });
+  const second = await createSession({ title: 'Changed B', conversationId: 'ipc-changed-b' });
+  const send = vi.fn();
+  currentWindow = { setBackgroundColor: vi.fn(), setTitleBarOverlay: vi.fn(), isDestroyed: () => false, webContents: { send } };
+  await recordNote(first.id, 'first owner');
+  await recordNote(second.id, 'second owner');
+  await recordNote(first.id, 'first owner again');
+  await vi.waitFor(() => expect(send.mock.calls.filter(([channel]) => channel === 'session:changed')).toHaveLength(1));
+  const [, change] = send.mock.calls.find(([channel]) => channel === 'session:changed')!;
+  // Earlier fixtures may share this burst; each owner is still named exactly once.
+  expect(change.sessionIds).toEqual(expect.arrayContaining([first.id, second.id]));
+  expect(new Set(change.sessionIds).size).toBe(change.sessionIds.length);
+  send.mockClear();
+  expect(await handlers.get('sessions:clearImageStorage')!(null, { mode: 'all' })).toMatchObject({ ok: true });
+  expect(send).toHaveBeenCalledWith('session:changed', { allTranscripts: true });
+});
+
+it('publishes the owning session when delivered input history is revised in place', async () => {
+  const input = await import('../src/main/session/input.js');
+  const store = await import('../src/main/session/store.js');
+  const previous = await readDurable('session-input');
+  const session = await createSession({ title: 'Input revision owner', conversationId: 'input-revision-owner' });
+  const id = '30000000-0000-4000-8000-000000000002';
+  const send = vi.fn();
+  currentWindow = { setBackgroundColor: vi.fn(), setTitleBarOverlay: vi.fn(), isDestroyed: () => false, webContents: { send } };
+  const owners = () => send.mock.calls.filter(([channel, change]) => channel === 'session:changed' && change?.sessionIds?.includes(session.id));
+  const row = { id, sessionId: session.id, text: 'Revised fixture', mode: 'auto', model: null, reasoningEffort: null, dueAt: 100,
+    createdAt: 100, owner: 'request', conversationId: 'input-revision-owner', offeredAt: 200, historyRecorded: false };
+  try {
+    await writeDurableNow('session-input', [{ ...row, state: 'tool' }]);
+    input.resetInputForTests();
+    expect(await handlers.get('sessions:outbox')!(null, undefined)).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(owners()).toHaveLength(1));
+    send.mockClear();
+    // Same canonical key, same anchor and count: only the delivery state changes in place.
+    await writeDurableNow('session-input', [{ ...row, state: 'sent', owner: null, messageId: `input:${id}`, deliveredAt: 300 }]);
+    input.resetInputForTests();
+    expect(await handlers.get('sessions:outbox')!(null, undefined)).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(owners()).toHaveLength(1));
+    const users = (await store.readEvents(session.id)).filter(event => event.kind === 'user_message');
+    expect(users).toHaveLength(1);
+    expect(users[0]).toMatchObject({ inputId: id, inputDelivery: 'confirmed' });
+  } finally {
+    await writeDurableNow('session-input', previous ?? []);
+    input.resetInputForTests();
+  }
+});
+
 it('stages clipboard image bytes with a preview through the general attachment owner', async () => {
   const drop = (payload: unknown) => handlers.get('sessions:dropFiles')!(null, payload) as Promise<any>;
   expect(await drop({ files: [] })).toMatchObject({ ok: false });
@@ -368,6 +419,38 @@ it('adds picker-selected projects, reuses containing approval, and leaves cancel
   expect(getConfig().roots).toHaveLength(1);
   expect((await fs.stat(folder)).isDirectory()).toBe(true);
   expect(await handlers.get('projects:remove')!(null, { id: folder })).toMatchObject({ ok: false });
+  expect(await handlers.get('projectGit:snapshot')!(null, { projectId: folder })).toMatchObject({ ok: false });
+  expect(await handlers.get('projectGit:diff')!(null, { projectId: first.data.id, path: '' })).toMatchObject({ ok: false });
+  expect(await handlers.get('sessions:toolEditReview')!(null, {
+    sessionId: first.data.id, callId: 'not-a-uuid', changeIndex: 0
+  })).toMatchObject({ ok: false });
+});
+
+it('does not install a stale Git watch after a newer Files project watch', async () => {
+  const { ProjectFileWatchSet } = await import('../src/main/project-file-watcher.js');
+  const { ProjectGitWatchSet } = await import('../src/main/project-git.js');
+  const contents = Object.assign(new EventEmitter(), { send: vi.fn(), isDestroyed: () => false });
+  currentWindow = { isDestroyed: () => false, webContents: contents } as any;
+  const firstId = '11111111-1111-4111-8111-111111111111';
+  const secondId = '22222222-2222-4222-8222-222222222222';
+  let finishFirst!: () => void, finishSecond!: () => void;
+  const fileSync = vi.spyOn(ProjectFileWatchSet.prototype, 'sync').mockImplementation(projectId =>
+    new Promise<void>(resolve => { if (projectId === firstId) finishFirst = resolve; else finishSecond = resolve; }));
+  const gitSync = vi.spyOn(ProjectGitWatchSet.prototype, 'sync').mockResolvedValue();
+  try {
+    const watch = (projectId: string) => handlers.get('projectFiles:watch')!(null, { projectId, directories: [''] });
+    const first = watch(firstId);
+    const second = watch(secondId);
+    finishSecond();
+    expect(await second).toMatchObject({ ok: true, data: true });
+    finishFirst();
+    expect(await first).toMatchObject({ ok: true, data: false });
+    expect(gitSync).toHaveBeenCalledOnce();
+    expect(gitSync).toHaveBeenCalledWith(secondId);
+  } finally {
+    fileSync.mockRestore();
+    gitSync.mockRestore();
+  }
 });
 
 /** The whole settings object the renderer sends, with the parts a test cares about set. */
@@ -376,6 +459,7 @@ function settings(over: { record: boolean; multiAgent: boolean }) {
   return {
     capabilities: base.capabilities,
     readOnly: base.readOnly,
+    commandAllowlist: base.commandAllowlist,
     tunnel: base.tunnel,
     ui: base.ui,
     sessions: { ...base.sessions, record: over.record },
@@ -469,6 +553,8 @@ describe('explicit settings replace the published tool contract', () => {
     };
     try {
       const before = snapshot();
+      const beforeState = await handlers.get('state:get')!(null, undefined) as any;
+      expect(beforeState.data.connectorSchemas.core).toBe(before.schemaId);
       const tool = kind === 'finish' ? 'session_finish' : 'exec_command';
       expect(before.tools.map(row => row.name)).toContain(tool);
       expect(before.tools.map(row => row.name)).not.toContain('session');
@@ -478,6 +564,8 @@ describe('explicit settings replace the published tool contract', () => {
         : { capabilities: { ...current.capabilities, command: false } }) };
       expect((await save(patch)).ok).toBe(true);
       const after = snapshot();
+      const afterState = await handlers.get('state:get')!(null, undefined) as any;
+      expect(afterState.data.connectorSchemas.core).toBe(after.schemaId);
       expect(after.tools.map(row => row.name)).not.toContain(tool);
       expect(after.tools.map(row => row.name)).not.toContain('session');
       expect(after.schemaId).not.toBe(before.schemaId);
@@ -785,6 +873,73 @@ describe('settings writes from more than one UI', () => {
     expect((await save({ ...current, mcp: { instructions: 'x'.repeat(4001) } }, current)).ok).toBe(false);
     expect(getConfig().mcp.instructions).toBe('');
   });
+  it('starts and stops the local control API only when its switch changes, and keeps it through stale saves', async () => {
+    const controlApi = await import('../src/main/control-api.js');
+    controlApi.initControlApiPath(dir);
+    const endpoint = path.join(dir, 'control-api', 'endpoint.json');
+    try {
+      const base = defaultConfig(); await saveConfig(base);
+      expect((await save({ ...base, controlApi: { enabled: true } }, base)).ok).toBe(true);
+      expect(JSON.parse(await fs.readFile(path.join(dir, 'config.json'), 'utf8')).controlApi).toEqual({ enabled: true, allowActions: false });
+      const { port } = JSON.parse(await fs.readFile(endpoint, 'utf8'));
+      expect(controlApi.controlApiPort()).toBe(port);
+      // A save from a form that still shows the old value, and one from a build that has no
+      // such field, both leave the switch and the running listener alone.
+      expect((await save({ ...base, ui: { ...base.ui, minimizeToTray: !base.ui.minimizeToTray } }, base)).ok).toBe(true);
+      const legacy = { ...base } as Partial<typeof base>; delete legacy.controlApi;
+      expect((await save(legacy, legacy)).ok).toBe(true);
+      expect(getConfig().controlApi.enabled).toBe(true);
+      expect(controlApi.controlApiPort()).toBe(port);
+      const current = getConfig();
+      expect((await save({ ...current, controlApi: { enabled: false } }, current)).ok).toBe(true);
+      expect(controlApi.controlApiPort()).toBeNull();
+      await expect(fs.access(endpoint)).rejects.toThrow();
+      // Switched off means nothing listens any more, not merely that requests are refused.
+      await expect(fetch(`http://127.0.0.1:${port}/v1/health`)).rejects.toThrow();
+    } finally {
+      await controlApi.stopControlApi();
+    }
+  });
+  it('keeps message actions behind the API switch and merges the two switches independently', async () => {
+    const controlApi = await import('../src/main/control-api.js');
+    controlApi.initControlApiPath(dir);
+    try {
+      const base = defaultConfig(); await saveConfig(base);
+      // Actions cannot be granted while the API is off.
+      expect((await save({ ...base, controlApi: { enabled: false, allowActions: true } }, base)).ok).toBe(true);
+      expect(getConfig().controlApi).toEqual({ enabled: false, allowActions: false });
+      const off = getConfig();
+      expect((await save({ ...off, controlApi: { enabled: true, allowActions: true } }, off)).ok).toBe(true);
+      expect(getConfig().controlApi).toEqual({ enabled: true, allowActions: true });
+      expect(controlApi.controlApiPort()).not.toBeNull();
+      // A form from a build with no allowActions field, and a stale form still showing it off,
+      // both leave a grant that was made after they were loaded.
+      const granted = getConfig();
+      expect((await save({ ...granted, controlApi: { enabled: true } }, granted)).ok).toBe(true);
+      expect(getConfig().controlApi.allowActions).toBe(true);
+      const stale = { ...granted, controlApi: { enabled: true, allowActions: false } };
+      expect((await save(stale, stale)).ok).toBe(true);
+      expect(getConfig().controlApi.allowActions).toBe(true);
+      // Turning the API off revokes the grant and stops the listener; turning it back on does
+      // not bring the grant back.
+      const running = getConfig();
+      expect((await save({ ...running, controlApi: { enabled: false, allowActions: true } }, running)).ok).toBe(true);
+      expect(getConfig().controlApi).toEqual({ enabled: false, allowActions: false });
+      expect(controlApi.controlApiPort()).toBeNull();
+      const stopped = getConfig();
+      expect((await save({ ...stopped, controlApi: { enabled: true } }, stopped)).ok).toBe(true);
+      expect(getConfig().controlApi).toEqual({ enabled: true, allowActions: false });
+      // The grant can be withdrawn on its own without stopping the listener.
+      const again = getConfig();
+      expect((await save({ ...again, controlApi: { enabled: true, allowActions: true } }, again)).ok).toBe(true);
+      const withdraw = getConfig();
+      expect((await save({ ...withdraw, controlApi: { enabled: true, allowActions: false } }, withdraw)).ok).toBe(true);
+      expect(getConfig().controlApi).toEqual({ enabled: true, allowActions: false });
+      expect(controlApi.controlApiPort()).not.toBeNull();
+    } finally {
+      await controlApi.stopControlApi();
+    }
+  });
   it('saves helper settings and tab retention through the renderer schema and merge boundary', async () => {
     const base = defaultConfig();
     await saveConfig(base);
@@ -840,6 +995,28 @@ describe('settings writes from more than one UI', () => {
       height: 36, color: '#00000000', symbolColor: '#ffffff'
     });
     expect(getConfig().goal.enabled).toBe(false);
+  });
+
+  it('persists command policy fields independently across stale renderer saves', async () => {
+    const base = defaultConfig();
+    await saveConfig(base);
+    const enabled = await save({
+      ...base, commandAllowlist: { enabled: true, mode: 'deny', rules: ['git status', 'git diff *'] }
+    }, base);
+    expect(enabled.ok, enabled.error).toBe(true);
+
+    const stale = await save({ ...base, ui: { ...base.ui, minimizeToTray: !base.ui.minimizeToTray } }, base);
+    expect(stale.ok, stale.error).toBe(true);
+    expect(getConfig().commandAllowlist).toEqual({ enabled: true, mode: 'deny', rules: ['git status', 'git diff *'] });
+
+    const current = getConfig();
+    expect((await save({
+      ...current, commandAllowlist: { ...current.commandAllowlist, enabled: false }
+    }, current)).ok).toBe(true);
+    expect(getConfig().commandAllowlist).toEqual({ enabled: false, mode: 'deny', rules: ['git status', 'git diff *'] });
+    expect((await save({
+      ...getConfig(), commandAllowlist: { enabled: true, mode: 'allow', rules: ['git status; whoami'] }
+    }, getConfig())).ok).toBe(false);
   });
 
   it('preserves a newer unattributed-call choice across an unrelated stale renderer save', async () => {

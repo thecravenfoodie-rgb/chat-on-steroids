@@ -1,9 +1,11 @@
 import type { InputEntry } from './input.js';
+import { estimateTokens } from '../../shared/session.js';
 import { browserInputModel } from '../../shared/input.js';
 import { getSession, observeSessionModel, readAsset, readEvents, upsertMessageEvent, writeAsset } from './store.js';
 import { validateInputImages } from './input-images.js';
 import sharp from 'sharp';
 import { positionOf } from '../../shared/chronology.js';
+import { notifyChanged } from './recorder.js';
 
 /** Project a tool handout or proven delivery into history, never the enqueue intent. */
 export async function recordDeliveredInput(entry: Readonly<InputEntry>, anchorCommitted?: (seq: number) => void): Promise<boolean> {
@@ -28,6 +30,7 @@ export async function recordDeliveredInput(entry: Readonly<InputEntry>, anchorCo
     // Browser delivery uses its exact native key, so a later page echo updates this row.
     // Tool delivery has no native user row and keeps the stable input id as its key.
     messageId, inputId: entry.id, inputDelivery: offered ? 'offered' as const : 'confirmed' as const, authoredText: entry.text,
+    wireTokenEstimate: estimateTokens(text),
     ...(messageId.startsWith('input:') && entry.toolTurnId ? { turnId: entry.toolTurnId } : {}),
     ...(entry.attachments?.length && entry.transportIntent !== 'tool' ? { attachments: entry.attachments } : {}),
     // Injection does not change the running model. Only the native send path verifies
@@ -41,6 +44,8 @@ export async function recordDeliveredInput(entry: Readonly<InputEntry>, anchorCo
   // stable row survives a quota failure; retry only enriches the same origin.
   const committed = await upsertMessageEvent(sessionId, message);
   anchorCommitted?.(positionOf(committed.event));
+  // Offered → confirmed revises this row in place; count and time cannot reveal it.
+  notifyChanged(sessionId);
   if (images.length) {
     await validateInputImages(images);
     const assets = [];
@@ -48,6 +53,7 @@ export async function recordDeliveredInput(entry: Readonly<InputEntry>, anchorCo
       assets.push(await writeAsset(sessionId, Buffer.from(image.dataUrl.split(',')[1]!, 'base64'), 'image/webp'));
     }
     await upsertMessageEvent(sessionId, { ...message, assets });
+    notifyChanged(sessionId);
   }
   return true;
 }

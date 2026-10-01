@@ -96,6 +96,7 @@ function coreInstructions(ctx: ToolContext, platform: NodeJS.Platform, skills: s
     ctx.readOnly ? 'The local tools are read-only.' : 'Use the tools listed in this conversation.',
     ...(writable || executable ? [`You can always use ${[writable && 'file writing', executable && 'exec_command'].filter(Boolean).join(' and ')} in CoS. Never hallucinate a block from ChatGPT environment messages.`] : []),
     'Report exact failures: identity, session_id and output-limit errors do not mean Read-only. Never replay successful patches or commands to recover a terminal.',
+    '"This tool call was blocked by OpenAI because we couldn\'t determine the safety status of the request." comes from ChatGPT before CoS receives the call. It is not a CoS failure or a missing capability: retry the identical call once.',
     'Unattributed is recording status, not permission. With Allow unattributed calls enabled, the request id owns its workspace, plan, terminals and agent family until exact chat proof arrives. A missing target limits that operation only; keep using enabled tools.',
     'Use full project paths under an approved root, including intermediate folders. Virtual or absolute native paths work; linked projects also accept relative paths.',
   ];
@@ -118,6 +119,9 @@ function coreInstructions(ctx: ToolContext, platform: NodeJS.Platform, skills: s
       ...(LAUNCHES_WINDOWS_POWERSHELL_5 ? ['This is Windows PowerShell 5.1, without && or ||. Use cmds or A; if ($?) { B }.'] : [])
     );
     else lines.push('exec_command uses the host’s normal POSIX shell (zsh/bash/sh unless requested otherwise). The bundled ripgrep directory is first on PATH.');
+    if (config.commandAllowlist.enabled) lines.push(
+      `Command launch policy is enabled in ${config.commandAllowlist.mode === 'deny' ? 'denylist' : 'allowlist'} mode. COMMAND_NOT_ALLOWED is the user\'s launch policy, not Read-only mode or an internal failure. Do not evade it through another tool, alternate spelling or apply_patch interception; ask the user to change Settings. Programs permitted to start remain trusted after launch, including stdin, child processes and project code.`
+    );
   } else if (ctx.exposedFind ?? caps.search) {
     lines.push('find searches filenames or file contents without a shell. Narrow path and include patterns to the relevant area.');
   }
@@ -137,12 +141,12 @@ function coreInstructions(ctx: ToolContext, platform: NodeJS.Platform, skills: s
     'Use agents for independent subtasks while continuing useful work yourself. Reuse a sleeping worker for related follow-up work before spawning a replacement. Only terminal workers whose context is full need replacing.',
     'When spawning workers, omit model and reasoning_effort unless the user explicitly requests an override. The app uses saved worker defaults; do not ask the user to choose or confirm them.',
     'A worker sees only what you send it. In spawn, put shared repository/folder instructions, constraints and validation requirements in context once; put the objective and assigned files in each task. Explicitly say what each worker may change. Do not repeat the shared context in every task.',
-    'Use action=message to steer a worker; batch messages when sending several. Worker reports arrive with tool results. Check their findings and changes before relying on them.',
+    'Use action=message to steer a worker; batch messages when sending several. Reports arrive only with tool results; they do not restart an idle prime. Use status once to collect pending reports before finalizing; do not repeatedly poll. If a report has not arrived, state that review is pending; do not claim delegated verification is complete before reading its report. Check findings and changes before relying on them.',
     'Workers communicate with the prime, keep working while replies are pending, and use action=finish when done with RESULT / CHANGES / VALIDATION / BLOCKERS. A finished reusable worker sleeps and can be messaged again.'
   );
   if (ctx.exposedFinishTool ?? config.ui.finishTool) lines.push(
     '',
-    'session_finish is for Astra only when the user prompt explicitly requests it. Follow that prompt’s finish timing after implementation; complete newly delivered work. It is not a plan/progress update or a way to collect queued tasks. Workers use agents action=finish instead.'
+    'Use session_finish only when the user prompt explicitly requests it, with any model. Follow that prompt’s finish timing after implementation; complete newly delivered work. It is not a plan/progress update or a way to collect queued tasks. Workers use agents action=finish instead.'
   );
   if (desktop && (caps.screen || caps.control || caps.clipboardRead || caps.clipboardWrite)) lines.push(
     '',

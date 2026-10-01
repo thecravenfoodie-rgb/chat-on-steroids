@@ -28,7 +28,8 @@
  * ## What is sent
  *
  * Authored user messages, ChatGPT commentary and final answers, in order, plus
- * the Compact & Resume bootstrap that the replacement chat actually received. No tool calls,
+ * the Compact & Resume bootstrap that the replacement chat actually received. Of tool calls
+ * only a count per turn, so work that ran is not mistaken for a claim: no tool names,
  * no arguments, no results, no file contents. The goal model is deciding whether the user's
  * request has been satisfied, and the conversation is the only evidence it needs for that;
  * the rest is this machine's business and does not leave it.
@@ -42,7 +43,7 @@
  */
 
 import { requestBrowserDecision, authorizeBrowserHelperRetry } from './session/input.js';
-import { goalErrorMessage } from '../shared/goal-errors.js';
+import { goalErrorKey, goalErrorMessage } from '../shared/goal-errors.js';
 import { MAX_CHATGPT_MESSAGE_CHARS, userPromptText } from '../shared/user-prompt.js';
 import { planProgressText, type TaskProgressUpdate } from '../shared/task-progress.js';
 import { TaskRequestError } from './task-request.js';
@@ -50,11 +51,15 @@ import { GOAL_MARKER_INSTRUCTION, templateGoalDecision } from '../shared/goal-te
 import type { GoalBackend } from '../shared/types.js';
 import { createHash } from 'node:crypto';
 import { getConfig } from './config.js';
-import { writeDurableNow, writeDurableSoon } from './durable.js';
+import { getChatModels, refreshForUnoffered } from './chat-models.js';
+import { resolveChatModel } from '../shared/chat-models.js';
+import type { ReasoningEffort } from '../shared/session.js';
+import { writeDurableNow, writeDurableSnapshotSoon, writeDurableSoon } from './durable.js';
 import { logInfo, logWarn } from './logger.js';
 import { getSecret } from './secrets.js';
 import { findSessionByConversation, getSession, readEvents, readHandoff, readRecentEvents, turnHasMcpCall } from './session/store.js';
 import { foldProgress } from '../shared/session.js';
+import { modelFacingText } from '../shared/content-reference.js';
 import { supportsFinishAutomation } from '../shared/finish.js';
 
 /** A finish-only preference has authority only while the finish tool is available. */
@@ -141,6 +146,9 @@ export function goalProviderKey(kind: GoalProviderKind): Promise<string | null> 
 
 /** How many messages of history the goal model is given, newest kept. */
 const MAX_CONTEXT_MESSAGES = 120;
+/** Recent CoS calls read to count per turn; a busy turn can make hundreds. */
+const MAX_TOOL_CALLS_COUNTED = 500;
+const HOLD_TOOLS = new Set(['session_finish', 'keep_astra_on_forever']);
 /** …and how many characters of them, so one 200k-character answer cannot be the whole prompt. */
 const MAX_CONTEXT_CHARS = 120_000;
 /** The per-message cut. Long enough to carry an answer's substance, short enough to fit many. */
@@ -335,6 +343,7 @@ export interface GoalDraftView {
   error: string | null;
   /** Plain explanation for both browser and desktop presentation. */
   message?: string;
+  messageKey?: string | null;
   /**
    * Whether this failure is one the same request could still answer.
    *
@@ -693,6 +702,74 @@ export interface GoalObjectivesSnapshot {
   objectives: Array<{ conversationId: string; objective: string }>;
 }
 
+/** One staged Goal-control save. */
+type GoalControlWrite = { conversationId: string; invalidated: boolean; changed: boolean };
+const pendingGoalObjectives = new Set<GoalControlWrite>();
+const pendingGoalSwitches = new Set<GoalControlWrite>();
+
+function invalidateGoalControlWrites(pending: Set<GoalControlWrite>, conversations?: readonly string[]): void {
+  for (const write of pending) {
+    write.changed = true;
+    if (!conversations || conversations.includes(write.conversationId)) write.invalidated = true;
+  }
+}
+
+function retargetGoalControlWrites(pending: Set<GoalControlWrite>, fromConversationId: string, toConversationId: string): number {
+  let moved = 0;
+  for (const write of pending) {
+    // Every synchronous projection changes the whole-file ledger seen by every staged save.
+    write.changed = true;
+    if (write.invalidated || write.conversationId !== fromConversationId) continue;
+    write.conversationId = toConversationId;
+    moved += 1;
+  }
+  return moved;
+}
+
+function saveGoalControl<T>(
+  pending: Set<GoalControlWrite>,
+  conversationId: string,
+  state: string,
+  snapshot: () => unknown,
+  stage: (targetConversationId: string) => { snapshot: unknown; publish: () => T } | { result: T }
+): Promise<T> {
+  const write: GoalControlWrite = { conversationId, invalidated: false, changed: false };
+  pending.add(write);
+  return serialGoalSwitch(async () => {
+    let attempted = false;
+    try {
+      for (let revision = 0; revision < 8; revision++) {
+        if (write.invalidated) throw new Error('Goal controls changed while saving; this request was superseded.');
+        write.changed = false;
+        const next = stage(write.conversationId);
+        if ('result' in next) return next.result;
+        attempted = true;
+        await writeDurableNow(state, next.snapshot);
+        if (write.invalidated) throw new Error('Goal controls changed while saving; this request was superseded.');
+        // Rebase when another synchronous projection or Compact & Resume changed the ledger.
+        if (!write.changed) return next.publish();
+      }
+      throw new Error('Goal controls kept changing during the save. No new control was accepted; retry when changes settle.');
+    } catch (error) {
+      if (attempted) {
+        // Never roll memory back. Repair durable state from the current accepted projection.
+        for (let repair = 0; repair < 4; repair++) {
+          write.changed = false;
+          const accepted = snapshot();
+          writeDurableSoon(state, accepted);
+          try { await writeDurableNow(state, accepted); }
+          catch { writeDurableSoon(state, snapshot()); break; }
+          if (!write.changed) break;
+        }
+        if (write.changed) writeDurableSoon(state, snapshot());
+      }
+      throw error;
+    } finally {
+      pending.delete(write);
+    }
+  });
+}
+
 /**
  * The specific goal a chat is being driven towards, keyed by conversation.
  *
@@ -708,19 +785,26 @@ export interface GoalObjectivesSnapshot {
  */
 const goalObjectives = new Map<string, string>();
 
-export function snapshotGoalObjectives(): GoalObjectivesSnapshot {
+function goalObjectivesSnapshot(objectives: ReadonlyMap<string, string>): GoalObjectivesSnapshot {
   return {
     version: 1,
     savedAt: Date.now(),
-    objectives: [...goalObjectives.entries()].map(([conversationId, objective]) => ({ conversationId, objective }))
+    objectives: [...objectives.entries()].map(([conversationId, objective]) => ({ conversationId, objective }))
   };
 }
 
+export function snapshotGoalObjectives(): GoalObjectivesSnapshot {
+  return goalObjectivesSnapshot(goalObjectives);
+}
+
 function persistGoalObjectives(): void {
-  writeDurableSoon(GOAL_OBJECTIVES_STATE, snapshotGoalObjectives());
+  // Capture at the serialized write boundary so a concurrent immediate save cannot make this
+  // background generation preserve another conversation's stale pre-commit row.
+  writeDurableSnapshotSoon(GOAL_OBJECTIVES_STATE, snapshotGoalObjectives);
 }
 
 export function restoreGoalObjectives(snapshot: GoalObjectivesSnapshot | null): void {
+  invalidateGoalControlWrites(pendingGoalObjectives);
   goalObjectives.clear();
   if (!snapshot || snapshot.version !== 1 || !Array.isArray(snapshot.objectives)) return;
   for (const raw of snapshot.objectives) {
@@ -744,6 +828,7 @@ export function goalObjectiveFor(conversationId: string): string {
  * than the one it sent — the two differ whenever the text had whitespace around it.
  */
 export function setGoalObjective(conversationId: string, text: string): string {
+  invalidateGoalControlWrites(pendingGoalObjectives, [conversationId]);
   const goal = text.trim();
   goalObjectives.delete(conversationId);
   if (goal) goalObjectives.set(conversationId, goal);
@@ -756,38 +841,45 @@ export function setGoalObjective(conversationId: string, text: string): string {
  *
  * `/goal/objective` tells the page the value was saved, so returning before the ordinary
  * 300 ms durable debounce leaves a real crash window where a successfully acknowledged goal
- * disappears on restart. Stage the in-memory value, make that exact snapshot durable, and only
- * then let the bridge publish success. If the write fails, restore the previous live value and
- * supersede durable.ts's retained failed generation with the still-authoritative snapshot.
+ * disappears on restart. Stage outside the published map and only publish after durable
+ * acceptance. A later synchronous set/clear supersedes this request. Compact & Resume instead
+ * retargets this same save to the replacement conversation and repeats the barrier there.
  */
 export async function setGoalObjectiveNow(conversationId: string, text: string): Promise<string> {
-  const before = goalObjectives.get(conversationId);
   const goal = text.trim();
-  goalObjectives.delete(conversationId);
-  if (goal) goalObjectives.set(conversationId, goal);
-  try {
-    await writeDurableNow(GOAL_OBJECTIVES_STATE, snapshotGoalObjectives());
-    return goal;
-  } catch (error) {
-    goalObjectives.delete(conversationId);
-    if (before) goalObjectives.set(conversationId, before);
-    writeDurableSoon(GOAL_OBJECTIVES_STATE, snapshotGoalObjectives());
-    throw error;
-  }
+  return saveGoalControl(pendingGoalObjectives, conversationId, GOAL_OBJECTIVES_STATE, snapshotGoalObjectives, (targetConversationId) => {
+    const next = new Map(goalObjectives);
+    next.delete(targetConversationId);
+    if (goal) next.set(targetConversationId, goal);
+    return {
+      snapshot: goalObjectivesSnapshot(next),
+      publish: () => {
+        goalObjectives.delete(targetConversationId);
+        if (goal) goalObjectives.set(targetConversationId, goal);
+        persistGoalObjectives();
+        return goal;
+      }
+    };
+  });
 }
 
 export function clearGoalObjective(conversationId: string): void {
+  invalidateGoalControlWrites(pendingGoalObjectives, [conversationId]);
   if (goalObjectives.delete(conversationId)) persistGoalObjectives();
 }
 
 /** Moves one chat-owned objective to the replacement conversation used by Compact & Resume. */
 export function moveGoalObjective(fromConversationId: string, toConversationId: string): boolean {
   if (!fromConversationId || !toConversationId || fromConversationId === toConversationId) return false;
+  invalidateGoalControlWrites(pendingGoalObjectives, [toConversationId]);
+  const pendingMoves = retargetGoalControlWrites(pendingGoalObjectives, fromConversationId, toConversationId);
   const objective = goalObjectives.get(fromConversationId);
-  if (!objective) return false;
+  if (!objective && pendingMoves === 0) return false;
   goalObjectives.delete(fromConversationId);
-  goalObjectives.delete(toConversationId);
-  goalObjectives.set(toConversationId, objective);
+  if (objective) {
+    goalObjectives.delete(toConversationId);
+    goalObjectives.set(toConversationId, objective);
+  }
   persistGoalObjectives();
   return true;
 }
@@ -856,24 +948,34 @@ function serialGoalSwitch<T>(work: () => Promise<T>): Promise<T> {
  */
 const MAX_GOAL_SWITCHES = 400;
 
-function boundGoalSwitches(): void {
-  if (goalSwitches.size <= MAX_GOAL_SWITCHES) return;
-  const oldestFirst = [...goalSwitches.entries()].filter(([, row]) => row.role !== 'decision').sort((a, b) => a[1].at - b[1].at);
-  for (const [conversationId] of oldestFirst.slice(0, goalSwitches.size - MAX_GOAL_SWITCHES)) {
-    goalSwitches.delete(conversationId);
+function boundGoalSwitches(switches = goalSwitches): void {
+  if (switches.size <= MAX_GOAL_SWITCHES) return;
+  const oldestFirst = [...switches.entries()].filter(([, row]) => row.role !== 'decision').sort((a, b) => a[1].at - b[1].at);
+  for (const [conversationId] of oldestFirst.slice(0, switches.size - MAX_GOAL_SWITCHES)) {
+    switches.delete(conversationId);
   }
+}
+
+function goalSwitchesSnapshot(switches: ReadonlyMap<string, GoalSwitchRow>): GoalSwitchesSnapshot {
+  return {
+    version: 1,
+    savedAt: Date.now(),
+    switches: [...switches.entries()].map(([conversationId, row]) => ({ conversationId, ...row }))
+  };
 }
 
 export function snapshotGoalSwitches(): GoalSwitchesSnapshot {
   boundGoalSwitches();
-  return {
-    version: 1,
-    savedAt: Date.now(),
-    switches: [...goalSwitches.entries()].map(([conversationId, row]) => ({ conversationId, ...row }))
-  };
+  return goalSwitchesSnapshot(goalSwitches);
+}
+
+function publishGoalSwitches(next: ReadonlyMap<string, GoalSwitchRow>): void {
+  goalSwitches.clear();
+  for (const [conversationId, row] of next) goalSwitches.set(conversationId, row);
 }
 
 export function restoreGoalSwitches(snapshot: GoalSwitchesSnapshot | null): void {
+  invalidateGoalControlWrites(pendingGoalSwitches);
   goalSwitches.clear();
   if (!snapshot || snapshot.version !== 1 || !Array.isArray(snapshot.switches)) return;
   for (const raw of snapshot.switches) {
@@ -917,34 +1019,21 @@ export function isGoalDecisionChat(conversationId: string): boolean {
 
 /** The bridge commits this before acknowledging a helper's first send. */
 export function registerGoalDecisionChat(conversationId: string, sourceSessionId?: string): Promise<void> {
-  return serialGoalSwitch(async () => {
-    if (!/^[0-9a-z-]{8,256}$/i.test(conversationId)) throw new Error('bad_conversation_id');
-    const before = goalSwitches.get(conversationId);
+  return saveGoalControl<void>(pendingGoalSwitches, conversationId, GOAL_SWITCHES_STATE, snapshotGoalSwitches, (targetConversationId) => {
+    if (!/^[0-9a-z-]{8,256}$/i.test(targetConversationId)) throw new Error('bad_conversation_id');
+    const before = goalSwitches.get(targetConversationId);
     if (sourceSessionId && !/^[\w-]{8,64}$/.test(sourceSessionId)) throw new Error('bad_source_session_id');
     if (sourceSessionId && before?.sourceSessionId && before.sourceSessionId !== sourceSessionId) throw new Error('goal_helper_wrong_source');
-    if (sourceSessionId && [...goalSwitches].some(([id, row]) => id !== conversationId && row.sourceSessionId === sourceSessionId)) throw new Error('goal_helper_already_bound');
-    if (before?.role === 'decision' && (!sourceSessionId || before.sourceSessionId === sourceSessionId)) return;
+    if (sourceSessionId && [...goalSwitches].some(([id, row]) => id !== targetConversationId && row.sourceSessionId === sourceSessionId)) throw new Error('goal_helper_already_bound');
+    if (before?.role === 'decision' && (!sourceSessionId || before.sourceSessionId === sourceSessionId)) return { result: undefined };
     if (before?.role !== 'decision' && [...goalSwitches.values()].filter(row => row.role === 'decision').length >= MAX_GOAL_SWITCHES) {
       throw new Error('goal_helper_capacity');
     }
-    const previous = new Map(goalSwitches);
+    const next = new Map(goalSwitches);
     const row: GoalSwitchRow = { enabled: false, mode: before?.mode ?? 'goal', at: Date.now(), role: 'decision', sourceSessionId };
-    goalSwitches.set(conversationId, row);
-    const snapshot = snapshotGoalSwitches();
-    const staged = new Map(goalSwitches);
-    try {
-      await writeDurableNow(GOAL_SWITCHES_STATE, snapshot);
-    } catch (error) {
-      if (goalSwitches.size === staged.size && [...staged].every(([id, value]) => goalSwitches.get(id) === value)) {
-        goalSwitches.clear();
-        for (const [id, value] of previous) goalSwitches.set(id, value);
-      } else if (goalSwitches.get(conversationId) === row) {
-        goalSwitches.delete(conversationId);
-        if (before) goalSwitches.set(conversationId, before);
-      }
-      writeDurableSoon(GOAL_SWITCHES_STATE, snapshotGoalSwitches());
-      throw error;
-    }
+    next.set(targetConversationId, row);
+    boundGoalSwitches(next);
+    return { snapshot: goalSwitchesSnapshot(next), publish: () => publishGoalSwitches(next) };
   });
 }
 
@@ -970,10 +1059,9 @@ export function goalArmedFor(conversationId: string): boolean {
 /**
  * Durable acceptance boundary for one chat's Goal/Loop switch.
  *
- * Same contract as `setGoalObjectiveNow`, for the same reason: the page is told the switch was
- * saved, so the value must be on disk before that is said. A failed write restores the previous
- * override exactly — including its absence, which is itself the meaningful state "this chat
- * still follows the app-wide setting".
+ * The accepted map remains authoritative until the new snapshot is durable. A synchronous
+ * clear/resume revokes pending saves instead of allowing their success or failure to recreate
+ * the old conversation's override.
  */
 export async function setGoalSwitchNow(
   conversationId: string,
@@ -981,26 +1069,34 @@ export async function setGoalSwitchNow(
   on: boolean,
   afterTurn?: boolean
 ): Promise<{ enabled: boolean; mode: GoalMode }> {
-  return serialGoalSwitch(async () => {
-    const before = goalSwitches.get(conversationId);
-    if (before?.role === 'decision') return { enabled: false, mode: before.mode };
-    if (!before && [...goalSwitches.values()].filter(row => row.role === 'decision').length >= MAX_GOAL_SWITCHES) {
-      throw new Error('goal_switch_capacity');
-    }
-    const next = applyGoalSwitch(goalSwitchFor(conversationId), which, on);
-    goalSwitches.set(conversationId, { enabled: next.enabled, mode: next.mode,
-      afterTurn: afterTurn ?? before?.afterTurn ?? false, at: Date.now() });
-    try {
-      await writeDurableNow(GOAL_SWITCHES_STATE, snapshotGoalSwitches());
-    } catch (error) {
-      goalSwitches.delete(conversationId);
-      if (before) goalSwitches.set(conversationId, before);
-      writeDurableSoon(GOAL_SWITCHES_STATE, snapshotGoalSwitches());
-      throw error;
-    }
-    notifyGoalChange();
-    return { enabled: next.enabled, mode: next.mode };
-  });
+  if (!on && goalSwitchFor(conversationId).mode === which) {
+    invalidateGoalControlWrites(pendingGoalSwitches, [conversationId]);
+  }
+  return saveGoalControl<{ enabled: boolean; mode: GoalMode }>(
+    pendingGoalSwitches,
+    conversationId,
+    GOAL_SWITCHES_STATE,
+    snapshotGoalSwitches,
+    (targetConversationId) => {
+      const before = goalSwitches.get(targetConversationId);
+      if (before?.role === 'decision') return { result: { enabled: false, mode: before.mode } };
+      if (!before && [...goalSwitches.values()].filter(row => row.role === 'decision').length >= MAX_GOAL_SWITCHES) {
+        throw new Error('goal_switch_capacity');
+      }
+      const next = applyGoalSwitch(goalSwitchFor(targetConversationId), which, on);
+      const staged = new Map(goalSwitches);
+      staged.set(targetConversationId, { enabled: next.enabled, mode: next.mode,
+        afterTurn: afterTurn ?? before?.afterTurn ?? false, at: Date.now() });
+      boundGoalSwitches(staged);
+      return {
+        snapshot: goalSwitchesSnapshot(staged),
+        publish: () => {
+          publishGoalSwitches(staged);
+          notifyGoalChange();
+          return { enabled: next.enabled, mode: next.mode };
+        }
+      };
+    });
 }
 
 /**
@@ -1012,6 +1108,7 @@ export async function setGoalSwitchNow(
  * "stop everything".
  */
 export function clearAllGoalSwitches(): void {
+  invalidateGoalControlWrites(pendingGoalSwitches);
   if (goalSwitches.size === 0) return;
   for (const [id, row] of goalSwitches) if (row.role !== 'decision') goalSwitches.delete(id);
   persistGoalSwitches();
@@ -1020,6 +1117,7 @@ export function clearAllGoalSwitches(): void {
 /** Drops one chat's override, putting it back under the app-wide setting. */
 export function clearGoalSwitch(conversationId: string): void {
   if (isGoalDecisionChat(conversationId)) return;
+  invalidateGoalControlWrites(pendingGoalSwitches, [conversationId]);
   if (goalSwitches.delete(conversationId)) persistGoalSwitches();
 }
 
@@ -1027,8 +1125,10 @@ export function clearGoalSwitch(conversationId: string): void {
 export function moveGoalSwitch(fromConversationId: string, toConversationId: string): boolean {
   if (!fromConversationId || !toConversationId || fromConversationId === toConversationId) return false;
   if (isGoalDecisionChat(fromConversationId) || isGoalDecisionChat(toConversationId)) return false;
+  invalidateGoalControlWrites(pendingGoalSwitches, [fromConversationId]);
   const row = goalSwitches.get(fromConversationId);
   if (!row) return false;
+  invalidateGoalControlWrites(pendingGoalSwitches, [toConversationId]);
   goalSwitches.delete(fromConversationId);
   goalSwitches.set(toConversationId, row);
   persistGoalSwitches();
@@ -1052,7 +1152,7 @@ export function goalProgressFor(mode: GoalMode, draft?: GoalDraftView | null): {
   const backend = draft?.backend ?? goalBackendFor(mode);
   return {
     backend,
-    model: draft?.model ?? (backend === 'chatgpt' ? settings.helperModel ?? 'gpt-5.6-sol'
+    model: draft?.model ?? (backend === 'chatgpt' ? helperModelLabel()
       : backend === 'templates' ? 'Offline templates' : settings.model),
     provider: settings.provider.kind
   };
@@ -1079,13 +1179,24 @@ function view(draft: GoalDraft): GoalDraftView {
     // is history, and a page that polls again must not find a message to type a second time.
     reply: draft.stage === 'ready' && !draft.acknowledged ? draft.reply : '',
     error: draft.error,
-    ...(draft.error ? { message: goalErrorMessage(draft.error) } : {}),
+    ...(draft.error ? { message: goalErrorMessage(draft.error), messageKey: goalErrorKey(draft.error) } : {}),
     retryable: draft.stage === 'failed' && retryableGoalFailure(draft.error ?? '')
   };
 }
 
+/**
+ * A failure nothing will fix on its own: no credit, a rejected key, an unknown model. The page does
+ * not retry it, so it is the chat's Goal state until a newer draft replaces it. Hiding it once the
+ * page acknowledged it left only the still-owed reply, which read as "Answer settling" forever (#584).
+ */
+function settledFailure(draft: GoalDraft): boolean {
+  return draft.stage === 'failed' && draft.error !== null && !retryableGoalFailure(draft.error);
+}
+
 function expireDraftPayload(draft: GoalDraft): void {
   if (draft.settledAt === 0 || Date.now() - draft.settledAt <= DRAFT_TTL_MS) return;
+  // Its reason stays on screen; there is no payload to expire.
+  if (settledFailure(draft)) { draft.acknowledged = true; return; }
   // The TTL is for the *payload*, not the idempotency key. A ready draft can have crossed
   // ChatGPT's irreversible send boundary while its local ACK was lost. Keep this turn's token
   // as a spent tombstone until a genuinely newer generation supersedes it.
@@ -1111,7 +1222,7 @@ export function goalViewFor(conversationId: string, clientId?: string): GoalDraf
   // here only so the turn it belongs to cannot be drafted a second time, and reporting it
   // would leave the page polling fast and the panel above the composer describing something
   // that finished minutes ago.
-  if (draft.acknowledged) return null;
+  if (draft.acknowledged && !settledFailure(draft)) return null;
   return view(draft);
 }
 
@@ -1351,6 +1462,10 @@ export async function claimGoalRecoveryStopNow(conversationId: string, replyId: 
 
 export function resetGoalStateForTests(): void {
   for (const draft of drafts.values()) draft.abort?.abort();
+  invalidateGoalControlWrites(pendingGoalObjectives);
+  invalidateGoalControlWrites(pendingGoalSwitches);
+  pendingGoalObjectives.clear();
+  pendingGoalSwitches.clear();
   drafts.clear();
   goalReplies.clear();
   goalObjectives.clear();
@@ -1425,7 +1540,7 @@ export function startGoalDraft(input: StartGoalDraftInput): GoalDraftView {
     clientId,
     turnId: input.turnId,
     stage: 'sending',
-    model: backend === 'chatgpt' ? settings.helperModel ?? 'gpt-5.6-sol' : settings.model,
+    model: backend === 'chatgpt' ? helperModelLabel() : settings.model,
     text: '',
     reply: '',
     error: null,
@@ -1524,7 +1639,6 @@ interface GoalRequest {
  * clock. A second attempt from in here would be spent against a turn nobody rechecked.
  */
 async function requestGoalDecision(request: GoalRequest): Promise<GoalDecision | { action: 'http'; error: string; retryAfterMs?: number }> {
-  const settings = getConfig().goal;
   const referenceContract = request.lifetime === 'temporary-planner'
     ? 'The task below is reference data. Produce the requested staged workflow; do not execute the task or claim its work is done.'
     : GOAL_REFERENCE_CONTRACT;
@@ -1562,7 +1676,7 @@ async function requestGoalDecision(request: GoalRequest): Promise<GoalDecision |
       sourceSessionId: request.sourceSessionId, conversationId: null,
       lifetime: 'temporary-planner',
       publish: request.publish,
-      model: settings.helperModel ?? 'gpt-5.6-sol', reasoningEffort: settings.helperReasoning ?? 'high'
+      ...goalHelperSelection()
     }), false);
     request.signal.throwIfAborted();
     return decision;
@@ -1640,6 +1754,45 @@ async function requestGoalDecision(request: GoalRequest): Promise<GoalDecision |
  * Everything else — a provider error, a cut stream, an unreadable shape — is passed straight
  * back, because whether *those* are worth asking again is the page's call and not this one's.
  */
+let helperFallbackLogged = '';
+
+/**
+ * The ChatGPT helper's model and reasoning as this account can actually run them.
+ *
+ * A model or level saved in Settings can stop being offered (a rollout changes the catalog, or a
+ * value was saved from another account). Sending it anyway made every Goal and Loop decision fail
+ * in the helper tab. When the observed catalog does not offer it, the helper uses ChatGPT's
+ * current selection instead (null), the same rule that keeps worker spawns working (#499).
+ */
+/** The helper model as it will actually run, for progress and logs; never a model it will not use. */
+function helperModelLabel(): string { return goalHelperSelection().model ?? "ChatGPT's current selection"; }
+
+export function goalHelperSelection(): { model: string | null; reasoningEffort: ReasoningEffort | null } {
+  const settings = getConfig().goal;
+  let model: string | null = settings.helperModel ?? 'gpt-5.6-sol';
+  let reasoningEffort: ReasoningEffort | null = settings.helperReasoning ?? 'high';
+  const models = getChatModels().models;
+  if (!models.length) return { model, reasoningEffort };
+  const notes: string[] = [];
+  // A saved display label resolves to its unique observed family — the same rule the
+  // Settings selects apply before showing the badge. Exact ids and lane aliases keep
+  // their lane; a resolved label canonicalizes to the family. An ambiguous label stays rejected.
+  const resolved = model ? resolveChatModel(models, model) : undefined;
+  if (model && !resolved) { notes.push(`model "${model}"`); model = null; }
+  else if (resolved && resolved.id !== model && !resolved.aliases?.includes(model)) model = resolved.id;
+  const offered = model ? (resolved ? [resolved] : models.filter(choice => choice.id === model || choice.aliases?.includes(model))) : models;
+  if (reasoningEffort && !offered.some(choice => choice.efforts.includes(reasoningEffort!))) {
+    notes.push(`reasoning "${reasoningEffort}"`); reasoningEffort = null;
+  }
+  const key = notes.join(',');
+  if (key) refreshForUnoffered(`goal helper ${key}`);
+  if (key && key !== helperFallbackLogged) {
+    helperFallbackLogged = key;
+    logWarn(`goal: the saved helper ${notes.join(' and ')} is not offered by this ChatGPT account; using ChatGPT's current selection`);
+  }
+  return { model, reasoningEffort };
+}
+
 async function requestDrivingDecision(
   request: GoalRequest
 ): Promise<GoalDecision | { action: 'http'; error: string; retryAfterMs?: number }> {
@@ -1866,7 +2019,7 @@ export async function draftOpeningMessage(
   const key = backend === 'api' ? await goalProviderKey(endpoint.kind) : null;
   // Custom endpoints may be keyless; only OpenRouter fails here without one.
   if (backend === 'api' && !key && endpoint.kind === 'openrouter') return { error: 'no_api_key' };
-  const model = backend === 'chatgpt' ? settings.helperModel ?? 'gpt-5.6-sol' : settings.model;
+  const model = backend === 'chatgpt' ? helperModelLabel() : settings.model;
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), REQUEST_TIMEOUT_MS);
   try {
@@ -2306,13 +2459,24 @@ async function committedResumeHandoffId(
 export async function conversationMessages(sessionId: string, deliveredInput: readonly string[] = [], excludedInputIds: ReadonlySet<string> = new Set()): Promise<ChatMessage[]> {
   const recentLimit = MAX_CONTEXT_MESSAGES * 2;
   const { listInputs } = await import('./session/input.js');
-  const [recent, userReferences, inputs] = await Promise.all([
+  const [recent, userReferences, inputs, toolCalls] = await Promise.all([
     readRecentEvents(sessionId, recentLimit, {
       kinds: ['user_message', 'assistant_message', 'progress']
     }),
     readRecentEvents(sessionId, MAX_CONTEXT_MESSAGES, { kinds: ['user_message'] }),
-    listInputs()
+    listInputs(),
+    readRecentEvents(sessionId, MAX_TOOL_CALLS_COUNTED, { kinds: ['tool_call'] })
   ]);
+  // Only how many CoS calls each turn made. Without it the helper cannot tell "ran the
+  // command" from "said it did" and keeps asking for the same work again.
+  const callsByTurn = new Map<string, number>();
+  for (const call of toolCalls) {
+    // Hold calls are waiting, not work, exactly as the finish boundary counts them.
+    if (call.kind === 'tool_call' && call.source === 'mcp' && call.turnId && !HOLD_TOOLS.has(call.call.tool)) {
+      callsByTurn.set(call.turnId, (callsByTurn.get(call.turnId) ?? 0) + 1);
+    }
+  }
+  const lastAnswerOfTurn = new Map<string, number>();
   const automaticIds = new Set(inputs.filter(input => input.sessionId === sessionId && input.finishOwner).map(input => input.id));
   // Assistant traffic must not evict the user's middle corrections before selection.
   const events = [...new Map([...recent, ...userReferences].map(event => [event.seq, event])).values()]
@@ -2329,7 +2493,7 @@ export async function conversationMessages(sessionId: string, deliveredInput: re
         ? { role: 'user', origin: 'automatic', content: '[Automatic continuation; not a new human requirement]\n' + content }
         : { role: 'user', content };
     } else if ((event.kind === 'assistant_message' && (event.final || event.messageId)) || (event.kind === 'progress' && event.source === 'extension')) {
-      const content = clip(event.message.text);
+      const content = clip(event.kind === 'assistant_message' ? modelFacingText(event.message.text, event.renderedHtml) : event.message.text);
       if (content) next = { role: 'assistant', content };
     }
     if (!next) continue;
@@ -2347,6 +2511,12 @@ export async function conversationMessages(sessionId: string, deliveredInput: re
       if (key) byStableMessage.set(key, ordered.length);
       ordered.push(next);
     }
+    const turn = next.role === 'assistant' && 'turnId' in event && typeof event.turnId === 'string' ? event.turnId : null;
+    if (turn && callsByTurn.has(turn)) lastAnswerOfTurn.set(turn, Math.max(lastAnswerOfTurn.get(turn) ?? -1, existingAt ?? ordered.length - 1));
+  }
+  for (const [turn, at] of lastAnswerOfTurn) {
+    const count = callsByTurn.get(turn)!;
+    ordered[at] = { ...ordered[at]!, content: `${ordered[at]!.content}\n\n[Chat On Steroids: ${count} tool call${count === 1 ? '' : 's'} ran in this turn. Arguments and results are not shown.]` };
   }
   for (const text of deliveredInput.slice(-5)) {
     const content = clip(userPromptText(text) ?? text, MAX_USER_MESSAGE_CHARS);

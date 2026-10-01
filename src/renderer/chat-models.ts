@@ -1,9 +1,9 @@
 import { ui, uiText, t } from './i18n.js';
 import type { ChatModelCatalog } from '../shared/chat-models.js';
-import { chatModelDisplayLabel } from '../shared/chat-models.js';
+import { chatModelDisplayLabel, resolveChatModel } from '../shared/chat-models.js';
 import type { Config } from '../shared/types.js';
 import type { ReasoningEffort } from '../shared/session.js';
-import { $, el, run } from './dom.js';
+import { $, el, icon, run } from './dom.js';
 
 let catalog: ChatModelCatalog = { state: 'unknown', requestedAt: null, observedAt: null, models: [] };
 let generation = 0;
@@ -13,17 +13,29 @@ let discovery: Promise<void> | null = null;
 let catalogSubscribed = false;
 type ObservedSelection = { model: string; reasoningEffort?: ReasoningEffort; observedAt: number };
 let composerContext: { scope: string | null; observation: ObservedSelection | null; edited: boolean } | null = null;
+/**
+ * The user's explicit choice to send with whatever model ChatGPT already has selected.
+ *
+ * Some plans (ChatGPT Go and Free, #104) show no model picker at all, so discovery can never
+ * produce a list and Send refused every message. Nothing is guessed or switched silently: this is
+ * offered only while no account list is readable, the person has to pick it, and a readable list
+ * takes over again the moment one exists.
+ */
+let useCurrentModel = false;
+type SendModel = { model: string | null; reasoningEffort: ReasoningEffort | null };
+const CURRENT_MODEL: SendModel = { model: null, reasoningEffort: null };
+function currentModelOffered(): boolean {
+  return !catalog.models.length && catalog.state !== 'pending' && (catalog.state === 'unavailable' || !!catalog.error);
+}
+function currentModelChosen(): boolean {
+  return useCurrentModel && currentModelOffered();
+}
 const pairs = [['composerModel', 'composerReasoning'], ['workerModel', 'workerReasoning'], ['helperModel', 'helperReasoning']] as const;
 const effortNames: Record<string, string> = { none: "Instant", minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max", ultra: "Ultra", pro: 'Pro' } satisfies Record<ReasoningEffort, string>;
-const composerEfforts = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'pro'] as const;
+const composerEfforts = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'pro'] as const;
 const effortLabel = (effort: string): string => effortNames[effort] ? t(effortNames[effort]) : effort;
 function observedModel(value: string) {
-  const exact = catalog.models.filter(choice => choice.id === value || choice.aliases?.includes(value));
-  if (exact.length) return exact.length === 1 ? exact[0] : undefined;
-  const normalize = (text: string) => text.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}.]/gu, '');
-  const name = normalize(value);
-  const matches = name ? catalog.models.filter(choice => normalize(choice.label) === name) : [];
-  return matches.length === 1 ? matches[0] : undefined;
+  return resolveChatModel(catalog.models, value);
 }
 
 function paintComposerContext(): void {
@@ -50,7 +62,6 @@ export function applyComposerSessionModel(scope: string | null, observation: Obs
 function composerModels() {
   if (!catalog.models.length) return [];
   return catalog.models
-    .filter(model => !/^gpt[ -]?5\.5(?:$|[ -])/i.test(model.label))
     .map(model => ({ ...model, efforts: composerEfforts.filter(effort => model.efforts.includes(effort)) }))
     .filter(model => model.efforts.length > 0);
 }
@@ -64,7 +75,10 @@ function options(select: HTMLSelectElement, choices: Array<{ id: string; label: 
     const unavailable = option(() => t("No observed choices"), ''); unavailable.disabled = true; desired.push(unavailable);
   }
   if (value && !choices.some(choice => choice.id === value)) {
-    const unverified = option(() => t("{0} · not verified", [value]), value);
+    // The worker and helper selects show an Unverified badge beside them; every other select
+    // (the composer and the reasoning pickers) keeps saying so in the option itself.
+    const badged = select.id === 'workerModel' || select.id === 'helperModel';
+    const unverified = option(badged ? value : () => t("{0} · not verified", [value]), value);
     unverified.disabled = true;
     desired.push(unverified);
   }
@@ -74,6 +88,43 @@ function options(select: HTMLSelectElement, choices: Array<{ id: string; label: 
     return !current || current.value !== node.value || current.text !== node.text || current.disabled !== node.disabled;
   })) select.replaceChildren(...desired);
   select.value = value;
+  if (select.id === 'workerModel' || select.id === 'helperModel') {
+    let badge = select.nextElementSibling as HTMLElement | null;
+    if (!badge?.classList.contains('model-verification')) {
+      badge = el('span', 'model-verification');
+      badge.id = `${select.id}Verification`;
+      select.after(badge);
+      select.setAttribute('aria-describedby', badge.id);
+    }
+    const unverified = !!value && !choices.some(choice => choice.id === value);
+    badge.hidden = !unverified;
+    if (unverified) ui(badge, 'textContent', () => t('Unverified'));
+  }
+}
+
+function distinctModelChoices(models: ChatModelCatalog['models']): Array<{ id: string; label: string | (() => string) }> {
+  const sameName = new Map<string, number>();
+  for (const model of models) sameName.set(model.label, (sameName.get(model.label) ?? 0) + 1);
+  const variant = (model: ChatModelCatalog['models'][number]): string | null => {
+    if (model.efforts.length && model.efforts.every(effort => effort === 'none')) return 'Instant';
+    if (model.efforts.length && model.efforts.every(effort => effort !== 'none' && effort !== 'pro')) return 'Reasoning';
+    if (model.efforts.length && model.efforts.every(effort => effort === 'pro')) return 'Pro';
+    return null;
+  };
+  const variantCounts = new Map<string, number>();
+  for (const model of models) {
+    const lane = variant(model);
+    if (lane) {
+      const key = `${model.label}\0${lane}`;
+      variantCounts.set(key, (variantCounts.get(key) ?? 0) + 1);
+    }
+  }
+  return models.map(model => {
+    if (sameName.get(model.label) === 1) return { id: model.id, label: model.label };
+    const lane = variant(model);
+    return { id: model.id, label: lane && variantCounts.get(`${model.label}\0${lane}`) === 1
+      ? () => `${model.label} · ${t(lane)}` : `${model.label} · ${model.id}` };
+  });
 }
 
 function paintPair(modelId: string, effortId: string, modelValue?: string, effortValue?: string): void {
@@ -88,7 +139,7 @@ function paintPair(modelId: string, effortId: string, modelValue?: string, effor
     // A saved execution alias is an exact lane request. The family effort union
     // cannot prove which efforts that alias supports. Retain both requested values
     // until the user deliberately selects a family; native selection proves the pair.
-    options(model, [...models, { id: nextModel, label: `${observed.label} · ${nextModel}` }], nextModel);
+    options(model, [...distinctModelChoices(models), { id: nextModel, label: `${observed.label} · ${nextModel}` }], nextModel);
     options(effort, [{ id: nextEffort, label: () => nextEffort ? effortLabel(nextEffort) : t('Keep requested model settings') }], nextEffort);
     return;
   }
@@ -103,7 +154,7 @@ function paintPair(modelId: string, effortId: string, modelValue?: string, effor
   if (supported && !nextEffort) {
     nextEffort = supported.includes('high') ? 'high' : supported[0] ?? '';
   }
-  options(model, models, nextModel);
+  options(model, distinctModelChoices(models), nextModel);
   options(effort, (models.find(item => item.id === model.value)?.efforts ?? []).map(id => ({ id, label: () => effortLabel(id) })), nextEffort);
 }
 
@@ -119,53 +170,132 @@ function paintComposerChoices(): void {
   models.dataset.signature = signature;
   models.replaceChildren();
   powers.replaceChildren();
-  // Order supported levels from Low upwards; never manufacture an unobserved step.
-  const steps = choices.flatMap(choice => choice.efforts.map(power => ({
-    model: choice.id, modelLabel: choice.label, effort: power, label: () => chatModelDisplayLabel(choice.label, power, effortLabel(power))
-  })));
   const title = document.getElementById('composerPowerTitle');
   const subtitle = document.getElementById('composerPowerModel');
-  if (!steps.length) {
+  if (!choices.length) {
+    if (currentModelChosen()) {
+      if (title) ui(title, 'textContent', () => t("ChatGPT’s current model"));
+      if (subtitle) ui(subtitle, 'textContent', () => t("Sent without choosing a model"));
+      return;
+    }
     if (title) ui(title, 'textContent', () => catalog.state === 'pending' ? t("Loading models…") : t("Models unavailable"));
     if (subtitle) ui(subtitle, 'textContent', () => catalog.state === 'pending' ? t("Reading your ChatGPT account") : t("Reload models"));
+    if (currentModelOffered()) {
+      const use = el('button', 'btn', () => t("Use ChatGPT’s current model")) as HTMLButtonElement;
+      use.type = 'button';
+      use.dataset.useCurrentModel = '';
+      ui(use, 'title', () => t("Your ChatGPT plan shows no model picker. Send with the model ChatGPT already uses."));
+      use.addEventListener('click', () => {
+        useCurrentModel = true;
+        if (composerContext) composerContext.edited = true;
+        paintStatus();
+      });
+      powers.append(use);
+    }
     return;
   }
-  const current = steps.findIndex(step => step.model === selected.value && step.effort === effort.value);
-  const track = el('div', 'power-track');
-  const dots = el('div', 'power-dots'); dots.setAttribute('aria-hidden', 'true');
-  dots.append(...steps.map(() => el('span', 'power-dot')));
-  const slider = document.createElement('input'); slider.type = 'range'; slider.min = '0'; slider.max = String(steps.length - 1); slider.step = '1';
-  slider.value = String(Math.max(0, current));
-  ui(slider, 'aria-label', () => t("Model and thinking effort"));
-  const show = () => {
-    const step = steps[Number(slider.value)]!;
-    if (title) ui(title, 'textContent', () => effortLabel(step.effort));
-    if (subtitle) subtitle.textContent = step.modelLabel;
-    ui(slider, 'aria-valuetext', step.label);
-    track.style.setProperty('--power-position', `${steps.length > 1 ? Number(slider.value) / (steps.length - 1) * 100 : 100}%`);
-    return step;
-  };
-  if (current >= 0) show();
-  else {
-    if (title) ui(title, 'textContent', () => t("Choose a level"));
-    if (subtitle) ui(subtitle, 'textContent', () => t("Previous selection unavailable"));
-    ui(slider, 'aria-valuetext', () => t('Choose an available model and effort'));
+  for (const choice of distinctModelChoices(choices)) {
+    const button = el('button', 'model-choice') as HTMLButtonElement;
+    button.type = 'button'; button.dataset.keepMenu = 'true'; button.dataset.model = choice.id;
+    button.setAttribute('aria-pressed', String(choice.id === selected.value));
+    button.append(el('span', '', choice.label), icon('i-check'));
+    button.addEventListener('click', event => {
+      // Repainting the choices detaches this button before the document listener.
+      // Keep the model menu open without giving it a second selection authority.
+      event.stopPropagation();
+      if (selected.value === choice.id) return;
+      const focused = document.activeElement === button;
+      selected.value = choice.id;
+      selected.dispatchEvent(new window.Event('change', { bubbles: true }));
+      if (focused) models.querySelector<HTMLButtonElement>('[aria-pressed="true"]')?.focus();
+    });
+    models.append(button);
   }
-  const choose = () => {
+  const supported = choices.find(choice => choice.id === selected.value)?.efforts ?? [];
+  if (title) ui(title, 'textContent', () => t('Thinking effort'));
+  const current = supported.findIndex(power => power === effort.value);
+  if (subtitle) ui(subtitle, 'textContent', () => current < 0 ? t('Previous selection unavailable') : effortLabel(effort.value));
+  if (!supported.length) return;
+  const choose = (power: ReasoningEffort | string): void => {
     if (composerContext) composerContext.edited = true;
-    const step = show();
-    paintPair('composerModel', 'composerReasoning', step.model, step.effort);
+    effort.value = power;
+    if (subtitle) ui(subtitle, 'textContent', () => effortLabel(power));
     paintComposerLabel();
     models.dataset.signature = JSON.stringify([catalog.state, choices, selected.value, effort.value]);
   };
-  slider.oninput = choose;
-  slider.onclick = () => { if (current < 0) choose(); };
+  // One effort (an Instant model) is not a choice: no slider, just its name. A stale saved
+  // effort still needs one explicit confirmation before Send may use this model.
+  if (supported.length === 1) {
+    if (current >= 0) return;
+    const only = supported[0]!;
+    const use = el('button', 'btn power-single', () => t('Use effort: {0}', [effortLabel(only)])) as HTMLButtonElement;
+    use.type = 'button'; use.dataset.keepMenu = 'true';
+    use.addEventListener('click', event => { event.stopPropagation(); choose(only); use.remove(); });
+    powers.append(use);
+    return;
+  }
+  const last = supported.length - 1;
+  const track = el('div', 'power-track');
+  // The thumb follows the pointer continuously and settles on the nearest effort when released;
+  // keys and the stored choice stay whole steps. The fill ends under the thumb's centre.
+  const slider = document.createElement('input'); slider.type = 'range'; slider.min = '0'; slider.max = String(last); slider.step = 'any';
+  ui(slider, 'aria-label', () => t('Thinking effort'));
+  const nearest = (): number => Math.max(0, Math.min(last, Math.round(Number(slider.value))));
+  const paintPosition = (value: number): void => { track.style.setProperty('--power-fraction', String(value / last)); };
+  const announce = (index: number): void => { ui(slider, 'aria-valuetext', () => effortLabel(supported[index]!)); };
+  for (let index = 0; index <= last; index++) {
+    const stop = el('span', 'power-stop'); stop.style.setProperty('--power-stop', String(index / last)); track.append(stop);
+  }
+  let shown = Math.max(0, current);
+  slider.value = String(shown);
+  paintPosition(shown);
+  if (current >= 0) announce(shown);
+  else ui(slider, 'aria-valuetext', () => t('Choose an available model and effort'));
+  const pick = (index: number): void => {
+    announce(index);
+    if (index !== shown || effort.value !== supported[index]) { shown = index; choose(supported[index]!); }
+  };
+  // Test DOMs and hidden windows may lack animation frames; settling then just lands at once.
+  const frame = (callback: FrameRequestCallback): number => typeof requestAnimationFrame === 'function' ? requestAnimationFrame(callback) : (callback(performance.now() + 1000), 0);
+  const cancelFrame = (id: number): void => { if (id && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(id); };
+  let settling = 0;
+  const settle = (): void => {
+    cancelFrame(settling);
+    const from = Number(slider.value), to = nearest(), started = performance.now();
+    pick(to);
+    const step = (now: number): void => {
+      const progress = Math.min(1, (now - started) / 140), eased = 1 - (1 - progress) ** 3;
+      const value = from + (to - from) * eased;
+      slider.value = String(value); paintPosition(value);
+      if (progress < 1) settling = frame(step);
+    };
+    settling = frame(step);
+  };
+  slider.addEventListener('input', () => { cancelFrame(settling); paintPosition(Number(slider.value)); pick(nearest()); });
+  slider.addEventListener('change', settle);
+  slider.addEventListener('pointerup', settle);
+  slider.addEventListener('keydown', event => {
+    const moves: Record<string, number> = { ArrowLeft: -1, ArrowDown: -1, ArrowRight: 1, ArrowUp: 1, PageDown: -1, PageUp: 1, Home: -last, End: last };
+    const move = moves[event.key];
+    if (move === undefined) return;
+    event.preventDefault();
+    slider.value = String(Math.max(0, Math.min(last, nearest() + move)));
+    settle();
+  });
   // Keep the range node alive through pointer/keyboard adjustment; hidden selects remain
   // the existing send authority, and no separate model selection state is introduced.
-  track.append(dots, slider); powers.append(track);
+  track.append(slider);
+  const endpoints = el('div', 'effort-endpoints');
+  endpoints.append(el('span', '', () => effortLabel(supported[0]!)), el('span', '', () => effortLabel(supported[last]!)));
+  powers.append(track, endpoints);
 }
 
 /** Admission guard for desktop sends: a stale selection is not permission to use defaults. */
+/** What Send uses: the confirmed pair, or the explicitly chosen "ChatGPT's current model". */
+export function composerSendModel(): SendModel | null {
+  return confirmedComposerModel() ?? (currentModelChosen() ? { ...CURRENT_MODEL } : null);
+}
+
 export function confirmedComposerModel(): { model: string; reasoningEffort: ReasoningEffort } | null {
   if (!catalog.models.length) return null;
   const model = $<HTMLSelectElement>('composerModel').value;
@@ -180,6 +310,7 @@ function paintComposerLabel(): void {
   const modelLabel = confirmed ? catalog.models.find(model => model.id === confirmed.model)!.label : '';
   const label = () => confirmed
     ? chatModelDisplayLabel(modelLabel, confirmed.reasoningEffort, effortLabel(confirmed.reasoningEffort))
+    : currentModelChosen() ? t("ChatGPT’s current model")
     : catalog.state === 'pending' ? t("Loading models…") : t("Select model");
   const node = $('composerModelLabel');
   if (confirmed) {
@@ -239,8 +370,9 @@ function discoverModels(): Promise<void> {
   return discovery;
 }
 
-export async function ensureComposerModel(refresh = false): Promise<ReturnType<typeof confirmedComposerModel>> {
+export async function ensureComposerModel(refresh = false): Promise<SendModel | null> {
   if (!refresh && catalog.models.length && catalog.state !== 'pending') return confirmedComposerModel();
+  if (!refresh && currentModelChosen()) return { ...CURRENT_MODEL };
   const ready = new Promise<void>(resolve => {
     const finish = () => { clearTimeout(timer); catalogWaiters.delete(check); resolve(); };
     const check = () => { if (catalog.state === 'ready' || catalog.state === 'unavailable') finish(); };
@@ -249,7 +381,7 @@ export async function ensureComposerModel(refresh = false): Promise<ReturnType<t
   });
   await discoverModels();
   await ready;
-  return catalog.state === 'ready' && !catalog.error ? confirmedComposerModel() : null;
+  return catalog.state === 'ready' && !catalog.error ? confirmedComposerModel() : currentModelChosen() ? { ...CURRENT_MODEL } : null;
 }
 
 export function applyChatModels(config: Config, previous?: Config): void {

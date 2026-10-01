@@ -16,8 +16,12 @@ import { unifiedExecManager } from './codex/manager.js';
 import { initSecretsPath } from './secrets.js';
 import { pluginManager } from './plugins/manager.js';
 import { setBrowserOpener, setBrowserWorkArea, shutdownBridge, startBridge } from './bridge.js';
+import { setStuckNotifier } from './stuck-notice.js';
 import { flushSessions, initSessionStore } from './session/store.js';
 import { initSkillsPath } from './skills.js';
+import { initUvRuntime } from './plugins/uv-runtime.js';
+import { initPetLibrary } from './pet-library.js';
+import { shutdownPetOverlay, startPetOverlay } from './pet-overlay.js';
 import { usageOverview } from './session/usage.js';
 import {
   flushRecorder,
@@ -43,6 +47,7 @@ import {
   type SwarmSnapshot
 } from './agents.js';
 import { flushDurable, initDurableStore, readDurable, writeDurableNow, writeDurableSoon } from './durable.js';
+import { initControlApiPath, shutdownControlApi, startControlApi } from './control-api.js';
 import { restoreRequestCorrelations } from './session/correlation.js';
 import { restoreBlockedChats } from './session/blocked-chats.js';
 import { stopComputerHelper } from './computer/index.js';
@@ -101,6 +106,8 @@ if (!hasSingleInstanceLock) {
   app.quit();
 }
 
+const BENIGN_RENDERER_ERRORS = new Set(['ResizeObserver loop completed with undelivered notifications.']);
+
 function createWindow(): void {
   const layout = windowLayoutForWorkArea(screen.getPrimaryDisplay().workArea);
   const icon = browserWindowIconPath(process.platform, app.isPackaged, process.resourcesPath);
@@ -115,6 +122,10 @@ function createWindow(): void {
       titleBarStyle: 'hidden' as const,
       titleBarOverlay: titleBarOverlayForTheme(getConfig().ui.theme, getConfig().ui.appearance)
     } : {}),
+    // macOS: the app's own top bar is the title bar, with the traffic lights inside it, instead
+    // of a native title row above a second row that only held the sidebar and View buttons.
+    // The overlay publishes the traffic-light area as env(titlebar-area-x) to the page.
+    ...(process.platform === 'darwin' ? { titleBarStyle: 'hidden' as const, titleBarOverlay: true } : {}),
     // Painted before the renderer loads, so a dark window never flashes white.
     backgroundColor: windowBackgroundForTheme(getConfig().ui.theme, getConfig().ui.appearance),
     title: 'Chat On Steroids',
@@ -170,7 +181,10 @@ function createWindow(): void {
   // Renderer errors are otherwise invisible from here. Only errors, and only the
   // message text — never anything the page was working with.
   window.webContents.on('console-message', (details) => {
-    if (details.level === 'error') logError(`renderer: ${details.message}`);
+    // Chromium's ResizeObserver notice is not a failure: the composer's height animation starts
+    // inside its observer by design, and the deferred notification arrives on the next frame.
+    // Logged as an error it appeared on every send and read like a renderer fault.
+    if (details.level === 'error' && !BENIGN_RENDERER_ERRORS.has(details.message)) logError(`renderer: ${details.message}`);
   });
 
   // Nothing in this app should ever open a second window or navigate away.
@@ -192,6 +206,7 @@ function createWindow(): void {
   // corpse. Dropping it is what makes those paths take their existing null branch.
   window.on('closed', () => {
     window = null;
+    if (!quitting && process.platform !== 'darwin' && !getConfig().ui.minimizeToTray) void shutdownPetOverlay();
   });
 
   if (process.env.ELECTRON_RENDERER_URL) {
@@ -235,6 +250,22 @@ setFinishNotifier((title, body, sessionId, turnId) => {
   notice.show();
   return true;
 });
+setStuckNotifier((title, body, sessionId) => {
+  // A person looking at the app already has the timeline note this accompanies; interrupting
+  // them with the same sentence is noise, exactly as the finish notice treats a focused window.
+  if (window?.isFocused() || !Notification.isSupported()) return false;
+  const notice = new Notification({ title, body });
+  notice.on('click', () => {
+    showWindow();
+    if (!window) return;
+    const target = window.webContents;
+    const open = (): void => { if (!target.isDestroyed()) target.send('session:write', sessionId); };
+    if (target.isLoadingMainFrame()) target.once('did-finish-load', open); else open();
+  });
+  notice.show();
+  return true;
+});
+
 setBrowserWorkArea(() => screen.getPrimaryDisplay().workArea);
 
 // Electron promises `second-instance` only after its own `ready`, not after our async startup.
@@ -307,6 +338,11 @@ void app.whenReady().then(async () => {
   try { await initSkillsPath(userData); }
   catch (error) { logWarn(`Skills library unavailable: ${error instanceof Error ? error.message : String(error)}`); }
   initDurableStore(userData);
+  initControlApiPath(userData);
+  initUvRuntime(userData);
+  // Bundled pet packages: the packaged app's resources, or the repository's pets/ folder in dev.
+  try { await initPetLibrary(userData, app.isPackaged ? path.join(process.resourcesPath, 'pets') : path.join(app.getAppPath(), 'pets')); }
+  catch (error) { logWarn(`Pet library unavailable: ${error instanceof Error ? error.message : String(error)}`); }
   await restoreChatModels();
   if (windowActivation.isDisabled()) return;
   await loadConfig();
@@ -426,6 +462,9 @@ void app.whenReady().then(async () => {
   );
   windowActivation.enable();
   if (!isBackgroundLaunch(process.argv)) windowActivation.request();
+  // The desktop pet overlay is independent of the main window once started; it stays hidden
+  // until a pet is enabled.
+  await startPetOverlay(() => window, () => windowActivation.request());
   // macOS `activate` can fire on first launch, so do not wire it at module load where it could
   // create a BrowserWindow before Electron is ready. Once the initial window path is established,
   // Dock activation/re-launch can safely recreate or focus it.
@@ -447,6 +486,11 @@ void app.whenReady().then(async () => {
   // ipc.ts uses the same eligibility rule when settings change.
   if (browserExtensionRequired(getConfig())) {
     void startBridge();
+  }
+  // Opt-in, and only once every fact it projects has been restored. ipc.ts starts and stops it
+  // when the setting changes; a failed bind is logged and leaves the rest of the app untouched.
+  if (getConfig().controlApi.enabled) {
+    startControlApi().catch((error: Error) => logWarn(`control API did not start: ${error.message}`));
   }
   if (getConfig().ui.autoConnect) void connect();
 
@@ -494,16 +538,21 @@ app.on('will-quit', (event) => {
 
   void runShutdownSequence(
     [
-      // Phase 1: stop both listeners from admitting work and let accepted requests drain.
+      // Phase 1: stop the listeners from admitting work and let accepted requests drain.
       // The budget has to clear the drains it contains, or it would silently defeat them:
       // the bridge force-closes wedged localhost sockets at 15s and the MCP endpoint forces
-      // its own drain at 30s. This is the outer bound on both, not a competing one.
-      { name: 'admission/drain', budgetMs: 40_000, run: () => [shutdownConnection(), shutdownBridge()] },
+      // its own drain at 30s. This is the outer bound on both, not a competing one. The control
+      // API is read-only and drains within 2s; stopping it also removes its token file.
+      {
+        name: 'admission/drain',
+        budgetMs: 40_000,
+        run: () => [shutdownConnection(), shutdownBridge(), shutdownControlApi()]
+      },
       // Phase 2: only after request handlers are done may their owned child processes go.
       {
         name: 'process cleanup',
         budgetMs: 15_000,
-        run: () => [unifiedExecManager.terminateAllProcesses(), stopComputerHelper(), pluginManager.close()]
+        run: () => [unifiedExecManager.terminateAllProcesses(), stopComputerHelper(), shutdownPetOverlay(), pluginManager.close()]
       },
       // Phase 3: recorder work can enqueue both session projections and named durable state.
       { name: 'recorder flush', budgetMs: 10_000, run: () => [flushRecorder()] },

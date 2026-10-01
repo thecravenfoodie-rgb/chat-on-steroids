@@ -1,20 +1,33 @@
 /**
  * Passive, bounded page-response projection.
  *
- * Never reads request headers, cookies, credentials or request bodies. Besides
+ * Never reads request headers, cookies or credentials. Bounded send/resume JSON contributes
+ * only model/message ids or the resume's conversation id. Besides
  * quota metadata, it observes the two opaque identifiers ChatGPT itself puts in the live
  * conversation event stream: `conversation_id` and `metadata.request_id`. The latter can
  * reach the stream tens of seconds before React publishes it, which is the difference between
- * an exact Core caller and CALLER_IDENTITY_REQUIRED. Only that pair crosses worlds.
+ * an exact Core caller and CALLER_IDENTITY_REQUIRED. Resume requests also project their
+ * opaque conversation id and HTTP status; the isolated recorder owns generation eligibility.
  */
 (() => {
   'use strict';
   const OBSERVER_VERSION = 2;
   const prior = window.__cosUsageObserver;
-  if (prior?.version === OBSERVER_VERSION && typeof prior.refresh === 'function' && prior.refresh() === true) return;
+  // An extension update re-executes this file in pages that stay open, and the same protocol
+  // version used to keep the *old* code running until the tab was reloaded — measured
+  // 2026-09-26: open tabs kept a request-id reader without the #414 fixes after the update that
+  // shipped them. The service worker asks for a replacement explicitly, and only while the page
+  // is not streaming, so the in-flight response a disposal would cancel does not exist.
+  const replace = window.__cosUsageReplace === true;
+  try { delete window.__cosUsageReplace; } catch { window.__cosUsageReplace = false; }
+  if (!replace && prior?.version === OBSERVER_VERSION && typeof prior.refresh === 'function' && prior.refresh() === true) return;
   // A legacy boolean has no listener/reader disposal handle. A fresh document is
   // required to replace it; stacking another active observer is not a repair.
   if (prior && typeof prior.dispose !== 'function') { window.__cosUsageObserverNeedsReload = true; return; }
+  if (replace && prior) {
+    // Hand the retained request origins to the page before the old reader forgets them.
+    try { window.dispatchEvent(new MessageEvent('message', { data: { type: 'cos-usage-request' }, origin: location.origin, source: window })); } catch { /* Best effort. */ }
+  }
   prior?.dispose();
   let active = true;
   const nativePost = window.postMessage.bind(window);
@@ -146,12 +159,31 @@
       }
       // One complete server event must carry both sides of the join. Retaining an id from a
       // prior frame would turn response order into authority; a contradictory frame abstains.
-      if (conversations.size !== 1) return;
-      const conversationId = conversations.values().next().value;
+      //
+      // The exception, and only within one response: ChatGPT now splits the two sides across
+      // consecutive events. The first event of a `/f/conversation` response is the stream
+      // handoff — it carries `conversation_id` (and `turn_topic_id`) — and the `input_message`
+      // event after it carries the request id with no `conversation_id` at all. So the id seen
+      // in this one response is remembered and used for later events that name none. This does
+      // not turn response order into authority across conversations: one HTTP response is one
+      // conversation, `stream` is per response, and an event naming a *different* conversation —
+      // or more than one — still abstains exactly as before. Measured on the live page and
+      // reported in #393; without it `readOrigin` abstained on every turn.
+      if (conversations.size > 1) return;
+      if (conversations.size === 1) {
+        const seen = conversations.values().next().value;
+        if (stream.conversationId && stream.conversationId !== seen) { stream.conversationId = null; return; }
+        stream.conversationId = seen;
+      }
+      const conversationId = conversations.size === 1 ? conversations.values().next().value : stream.conversationId;
+      if (!conversationId) return;
       // Only server metadata in a complete JSON event owns a request id. A key in
       // quoted model text, tool arguments or an unrelated nested object is not proof.
-      if (body?.conversation_id !== conversationId) return;
-      const requestIds = new Set([body.metadata?.request_id, body.message?.metadata?.request_id]
+      if (conversations.size === 1 && body?.conversation_id !== conversationId) return;
+      // `input_message.metadata` is where the id moved to: the same server metadata, one level
+      // further in, on the event that no longer names its conversation.
+      const requestIds = new Set([body?.metadata?.request_id, body?.message?.metadata?.request_id,
+        body?.input_message?.metadata?.request_id]
         .filter(id => typeof id === 'string' && REQUEST.test(id)));
       return requestIds.size ? { conversationId, requestIds: [...requestIds] } : null;
   }
@@ -267,7 +299,47 @@
     });
     window.WebSocket = observedWebSocket;
   }
+  /**
+   * The model a user message was sent to, read from the send request itself.
+   *
+   * ChatGPT's current turn view carries no model at all, so neither the page nor the reply can
+   * say which model a typed message used. `POST /backend-api/f/conversation` names both: the
+   * request's `model` and the id of the user message it delivers. Only those two values leave
+   * this function, and only for a well-formed body.
+   */
+  function noteSendModel(args, observedAt) {
+    try {
+      const init = args[1];
+      const method = String((init && init.method) || (args[0] && typeof args[0] === 'object' && args[0].method) || 'GET').toUpperCase();
+      if (method !== 'POST' || !init || typeof init.body !== 'string' || init.body.length > 2_000_000) return;
+      const url = new URL(typeof args[0] === 'string' ? args[0] : args[0] instanceof URL ? args[0].href : args[0].url, location.origin);
+      if (url.origin !== location.origin || !/^\/backend-api\/(?:f\/)?conversation$/.test(url.pathname)) return;
+      const body = JSON.parse(init.body);
+      const model = typeof body?.model === 'string' && /^[a-z0-9][a-z0-9._-]{0,63}$/i.test(body.model) ? body.model : null;
+      const messageIds = (Array.isArray(body?.messages) ? body.messages : []).slice(0, 8)
+        .filter(message => message?.author?.role === 'user' && typeof message.id === 'string' && CONVERSATION.test(message.id))
+        .map(message => message.id);
+      if (model && messageIds.length) post({ type: 'cos-send-model', model, messageIds, observedAt }, location.origin);
+    } catch { /* A body this reader does not understand proves nothing. */ }
+  }
   const inspectedResponses = new WeakSet();
+  function resumeRequest(args) {
+    try {
+      const init = args[1];
+      const method = String(init?.method || args[0]?.method || 'GET').toUpperCase();
+      const url = new URL(typeof args[0] === 'string' ? args[0] : args[0] instanceof URL ? args[0].href : args[0].url, location.origin);
+      if (method !== 'POST' || url.origin !== location.origin || url.pathname !== '/backend-api/f/conversation/resume' ||
+          typeof init?.body !== 'string' || init.body.length > 16 * 1024) return null;
+      const conversationId = JSON.parse(init.body)?.conversation_id;
+      if (typeof conversationId !== 'string' || !CONVERSATION.test(conversationId)) return null;
+      const request = { id: crypto.randomUUID(), conversationId };
+      // Capture the recorder's owner BEFORE fetch can yield or navigation can replace it.
+      // postMessage is asynchronous and could stamp an old request with a newer epoch.
+      window.dispatchEvent(new MessageEvent('message', { source: window, origin: location.origin,
+        data: { type: 'cos-resume-request', ...request } }));
+      return request;
+    } catch { return null; }
+  }
   const installFetchObserver = () => {
     if (!active || window.fetch === observedFetch || typeof window.fetch !== 'function') return;
     // A page wrapper may still call our earlier wrapper. Capture its downstream
@@ -276,10 +348,23 @@
     observedFetch = function (...args) {
       // Request order fences late responses, not accounts. No account identity is inferred.
       const observedAt = Date.now(), order = ++requestOrder;
+      noteSendModel(args, observedAt);
+      const resume = active ? resumeRequest(args) : null;
       const result = downstreamFetch.apply(this, args);
       if (!active) return result;
       void result.then((response) => {
         if (!active) return;
+        let status = null, streamOpened = false;
+        try {
+          const url = new URL(response.url);
+          if (url.origin === location.origin && url.pathname === '/backend-api/f/conversation/resume') {
+            status = response.status;
+            streamOpened = status === 200 && response.headers.get('content-type')?.includes('text/event-stream');
+          }
+        } catch { /* Unknown response identity cannot report a failure. */ }
+        if (resume) post({ type: 'cos-resume-response', ...resume,
+          status: inspectedResponses.has(response) ? null : status,
+          ...(streamOpened && !inspectedResponses.has(response) ? { streamOpened: true } : {}) }, location.origin);
         if (inspectedResponses.has(response)) return;
         inspectedResponses.add(response);
         void inspect(response, observedAt, order).catch(() => {});
@@ -290,7 +375,10 @@
           method = String(explicit || inherited || 'GET').toUpperCase();
         } catch { return; }
         if (method === 'POST') void inspectRequestOrigins(response, observedAt).catch(() => {});
-      }).catch(() => {});
+      }).catch(() => {
+        // Network rejection only retires custody; it cannot prove that the stream is gone.
+        if (resume) post({ type: 'cos-resume-response', ...resume, status: null }, location.origin);
+      });
       return result;
     };
     // ChatGPT installs its own fetch instrumentation after document_start. Keep that owner in

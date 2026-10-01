@@ -140,6 +140,21 @@ export interface FileChange {
   removed: number;
   /** True when the counts come from a bounded heuristic rather than a full diff. */
   approximate: boolean;
+  /** Immutable before/after text from this exact tool call, stored beside its session log. */
+  reviewAssetId?: string;
+  /** Why no review was kept for this change, so the UI can say so instead of offering nothing. */
+  reviewUnavailable?: 'too-large' | 'not-kept';
+}
+
+/** Historical edit evidence, independent of the current Git working tree. */
+export interface ToolEditReview {
+  callId: string;
+  changeIndex: number;
+  path: string;
+  added: number;
+  removed: number;
+  baseText: string;
+  currentText: string;
 }
 
 /** Only `tool_internal_error` is a connector defect. */
@@ -230,6 +245,57 @@ export interface ToolCallRecord {
 
 export type MessageState = 'streaming' | 'final';
 
+/**
+ * A source ChatGPT cites in a reply, as its citation pill holds it: `index` is the position in the
+ * reply's `content_references`, which an inline `:chatgpt-content-reference{index="…"}` names.
+ * The first source is the one the pill shows; the rest are the "+N" its card pages through.
+ */
+export interface MessageReference {
+  index: number;
+  sources: Array<{ title: string; url: string; source?: string; date?: number; snippet?: string }>;
+}
+
+export const MAX_MESSAGE_REFERENCES = 64;
+export const MAX_REFERENCE_SOURCES = 12;
+
+/** Revalidates references that crossed from the page: bounded, http(s) links only, anything else dropped. */
+export function messageReferences(value: unknown): MessageReference[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const text = (item: unknown, max: number): string =>
+    typeof item === 'string' ? item.replace(/\s+/g, ' ').trim().slice(0, max) : '';
+  const out: MessageReference[] = [];
+  const indexes = new Set<number>();
+  for (const entry of value.slice(0, MAX_MESSAGE_REFERENCES)) {
+    if (!entry || typeof entry !== 'object') continue;
+    const { index, sources } = entry as { index?: unknown; sources?: unknown };
+    if (!Number.isInteger(index) || (index as number) < 0 || (index as number) > 9999 || indexes.has(index as number) || !Array.isArray(sources)) continue;
+    const kept: MessageReference['sources'] = [];
+    for (const source of sources.slice(0, MAX_REFERENCE_SOURCES)) {
+      if (!source || typeof source !== 'object') continue;
+      const { title, url, source: name, date, snippet } = source as { title?: unknown; url?: unknown; source?: unknown; date?: unknown; snippet?: unknown };
+      const link = text(url, 2000);
+      if (!/^https?:\/\/[^\s]+$/i.test(link)) continue;
+      const label = text(name, 80), summary = text(snippet, 300);
+      const published = typeof date === 'number' && Number.isFinite(date) && date > 0 && date < 1e13 ? Math.round(date) : undefined;
+      kept.push({ title: text(title, 300) || link, url: link, ...(label ? { source: label } : {}),
+        ...(published ? { date: published } : {}), ...(summary ? { snippet: summary } : {}) });
+    }
+    if (!kept.length) continue;
+    indexes.add(index as number);
+    out.push({ index: index as number, sources: kept });
+  }
+  return out.length ? out : undefined;
+}
+
+/** A tool call still running for a chat, as its live caption names it. */
+export interface RunningToolActivity {
+  /** Present-tense summary built from the call's own arguments, e.g. "Running git status". */
+  title: string;
+  /** The kind its finished row will have, so the live row wears the same icon. */
+  kind: ActivitySummary['kind'];
+  since: number;
+}
+
 /** A persisted launch acknowledgement never proves that its child is still alive. */
 export function toolCallSummary(call: Pick<ToolCallRecord, 'tool' | 'summary'>): ActivitySummary {
   return call.tool === 'exec_command' && call.summary.metric === 'running'
@@ -298,6 +364,8 @@ export type SessionEvent =
       inputDelivery?: 'offered' | 'confirmed';
       /** Original app-authored text, excluding transport-only control instructions. */
       authoredText?: string;
+      /** Estimated token weight of the complete native payload actually sent to ChatGPT. */
+      wireTokenEstimate?: number;
       /** Native badge on this exact user message. Missing means unobserved; null means absent. */
       reaction?: string | null;
       attachments?: import('./input.js').InputAttachment[];
@@ -327,6 +395,13 @@ export type SessionEvent =
       renderedHtml?: StoredText;
       /** Public provider object UUID. Evidence for identity drift; not a canonical key or turn owner. */
       providerMessageId?: string;
+      /**
+       * The model ChatGPT's server says produced this reply (`resolved_model_slug`). Proof for
+       * counting sends per model; deliberately not `model`, which drives token attribution.
+       */
+      resolvedModel?: string;
+      /** Sources the reply cites inline, from ChatGPT's page model. */
+      references?: MessageReference[];
       state?: MessageState;
       /** Compatibility mirror for older consumers; equivalent to state === 'final'. */
       final: boolean;
@@ -395,8 +470,8 @@ export type SessionEvent =
    * call under the same server turn then proved it had not. Absent on the page's own starts.
    */
   | (BaseEvent & { kind: 'turn_start'; detail?: string })
-  | (BaseEvent & { kind: 'turn_end'; outcome: TurnOutcome; detail?: string; reason?: 'thinking_failed' })
-  | (BaseEvent & { kind: 'chat_error'; message: StoredText; recoverable?: boolean; blocking?: boolean; reason?: 'thinking_failed' })
+  | (BaseEvent & { kind: 'turn_end'; outcome: TurnOutcome; detail?: string; reason?: 'thinking_failed'; providerMessageId?: string })
+  | (BaseEvent & { kind: 'chat_error'; message: StoredText; recoverable?: boolean; blocking?: boolean; reason?: 'thinking_failed' | 'stream_gone' })
   | (BaseEvent & { kind: 'tool_call'; call: ToolCallRecord; origin?: number })
   /**
    * An app-authored line. `continuation` names the Compact & Resume it is about, so the
@@ -450,7 +525,10 @@ const CONTINUATION_MARKER_ESCAPED = /^\s*(?:\\?\[){2}CLF\\?-(HANDOFF|RESUME)\\?:
  * text first; authored Send instructions and ordinary user-message receipts remain unchanged.
  */
 export function unescapeMarkdown(value: string): string {
-  return value.replace(/\\([!-/:-@[-`{-~])/g, '$1');
+  // A backslash before a line break is the composer's Markdown hard break (see asTyped in
+  // shared/user-prompt.ts); ASCII punctuation is the other escape the page applies, and an
+  // indented line's first space comes back as `&#x20;` (#821).
+  return value.replace(/\\\r?\n/g, '\n').replace(/\\([!-/:-@[-`{-~])/g, '$1').replace(/(^|\n)&#x20;/g, '$1 ');
 }
 
 /** The continuation marker at the head of `text`, as typed or as the composer escaped it. */
@@ -646,6 +724,17 @@ export interface SessionSummary {
   origin: SessionOrigin | null;
 }
 
+/**
+ * What one `session:changed` push says about transcripts. A push without it refreshes only
+ * the session catalog and controls; the selected transcript is reread only for its owner.
+ */
+export interface SessionChange {
+  /** Exact local sessions whose durable transcript projection changed in this burst. */
+  sessionIds?: string[];
+  /** A cross-session mutation without enumerable owners; every open transcript is stale. */
+  allTranscripts?: true;
+}
+
 export interface Handoff {
   id: string;
   sessionId: string;
@@ -802,12 +891,26 @@ export interface AgentInfo {
   /**
    * Whether this agent can be brought back — by the prime, or by its own next call.
    *
-   * True for every sleeping worker under the context ceiling, and for one that ended for a
+   * True for every ordinary sleeping worker under the context ceiling, and for one that ended for a
    * reason that says nothing about the turn itself (its chat was closed, or it went quiet
    * after that). False for a worker whose tab never opened, one a person cleared, and one
-   * whose chat crossed the ceiling, which is what makes that crossing terminal.
+   * whose chat crossed the ceiling. A worker parked only because of ambiguous silence records
+   * silenceParked; when the recorder also knows the exact unresolved response, it stores that
+   * identity in silenceRecoveryTurnId. Neither field grants new work at the ceiling.
    */
   revivable: boolean;
+  /** Durable reason that this stopped worker released its slot on ambiguous silence, not completion. */
+  silenceParked?: boolean;
+  /**
+   * Exact unresolved server-turn identity retained alongside silenceParked when recorder evidence
+   * has one. This never grants a new-task wake; only exact same-turn recovery may consume it.
+   */
+  silenceRecoveryTurnId?: string | null;
+  /**
+   * Highest durable journal origin that existed when silence parked this worker. Same-turn MCP
+   * recovery accepts only request ownership already present at or before this boundary.
+   */
+  silenceRecoveryRequestOriginMax?: number | null;
   /**
    * Bridge command id of the most recent revival whose user message ChatGPT accepted.
    *
@@ -941,6 +1044,10 @@ export const MAX_TOOL_RESULT_TOKENS = 10_000;
 export function eventTokens(event: SessionEvent): number {
   switch (event.kind) {
     case 'user_message':
+      return Math.max(
+        storedTextTokens(event.message),
+        Number.isFinite(event.wireTokenEstimate) ? Math.max(0, Math.floor(event.wireTokenEstimate!)) : 0
+      );
     case 'assistant_message':
     case 'chat_error':
     case 'note':

@@ -130,6 +130,49 @@ it.each([false, true])('releases native hidden-window Presence and reopens a ret
   expect(doc.querySelector('[role="menu"]')).toBeNull();
   expect([...doc.querySelectorAll('style')]).toEqual([nativeStyle]);
 });
+/**
+ * An effort the account no longer offers resolves to the nearest one it does.
+ *
+ * ChatGPT's newer picker replaced its effort ladder: measured on 2026-09-26, the thinking models
+ * offer `medium`, `high` and `max`, and `xhigh` is gone. A saved `multiAgent.defaultReasoning = xhigh`
+ * therefore matched nothing and every worker spawn failed outright — three in one homelab run.
+ *
+ * Nearest by position in the vocabulary, ties upward. Here the model offers `low` and `ultra`:
+ * `xhigh` sits two steps below `ultra` and three above `low`, so it lands on `ultra`; `medium` sits
+ * one step above `low`, so it lands there. A model the account does not offer still refuses —
+ * choosing a different model is not a rounding decision.
+ */
+it.each([['xhigh', 11], ['medium', 10]] as const)('selects the nearest offered effort when %s is not offered', async (effort, bucket) => {
+  const f = fixture('', 0);
+  expect(await f.api.selectModelSettings('future-model', effort), `${effort} refused instead of rounded`).toBe(true);
+  expect(f.state.currentBucket).toBe(bucket);
+});
+it('still refuses a model the account does not offer, whatever the effort', async () => {
+  const f = fixture('', 0);
+  expect(await f.api.selectModelSettings('no-such-model', 'high')).toBe(false);
+});
+
+/*
+ * A fixed-tier family exposes only efforts outside the reasoning ladder: a Pro-only
+ * family reports `pro` as its sole rung. Asking for a ladder step there has nothing to
+ * round to — the family's own tier is the honest resolution, not a refusal.
+ */
+it('refuses a ladder effort for a Pro-only family instead of substituting its tier', async () => {
+  // Saved execution aliases stay exact, effort included (AGENTS.md §13): the app drops an
+  // unoffered effort before it asks, so a request that still names one must not run as Pro.
+  const f = fixture('', 0);
+  const pro = f.selections[0]![2]!;
+  pro.availability.status = 'available';
+  (pro as Record<string, unknown>).category = { ...pro.category, modelVersion: 'gpt-6-pro', shortLabel: '6' };
+  (pro as Record<string, unknown>).modelConfig = { title: '6' };
+  expect(await f.api.selectModelSettings('6', 'medium')).toBe(false);
+});
+
+it('still refuses a non-ladder effort the family does not offer', async () => {
+  const f = fixture('', 0);
+  expect(await f.api.selectModelSettings('gpt-5-6-thinking', 'pro')).toBe(false);
+});
+
 it('refuses selection success when the picker retains its focus trap', async () => {
   const f = fixture('', null);
   expect(await f.api.selectModelSettings('future-model', 'ultra')).toBe(false);

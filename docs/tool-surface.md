@@ -71,6 +71,21 @@ first non-zero one. Batching exists to spend one connector round trip instead of
 related checks. The `apply_patch` interception and the benign-non-zero-exit classification
 apply to single-command calls only.
 
+Settings can optionally enforce one application-wide command policy. It is disabled by default;
+while disabled, command behavior is unchanged and the saved mode and rules remain available.
+Allowlist mode permits only `cmd` items matching an exact argv rule such as `git status`, or a
+rule ending in a standalone `*`, such as `git diff *`, which also permits `git diff` with no extra
+arguments. Denylist mode rejects matching items and permits non-matches. An enabled empty
+Allowlist rejects every launch; an enabled empty Denylist permits ordinary supported invocations.
+In both modes, compound commands, substitutions, redirections, globs and other ambiguous shell
+syntax are rejected with `COMMAND_NOT_ALLOWED` before patch interception or process launch.
+Rules are case-sensitive and do not collapse executable paths to basenames.
+
+This is a launch policy, not an OS sandbox. A permitted program remains trusted after it starts,
+including its child processes, project/build code, shell environment and interactive input.
+`write_stdin` behavior and process ownership checks are unchanged. The human-operated workspace
+terminal is outside this policy.
+
 ### `write_stdin`
 
 Writes to or polls a live command session by `session_id`, with optional yield time and output
@@ -114,6 +129,12 @@ are actually working. Waking one needs a free slot, reopens or refocuses that wo
 and types the prime's message into it as an ordinary user message. A worker becomes permanently
 finished only when its chat reaches the context ceiling (400,000 tokens by the app's own session
 accounting); crossing it never interrupts work in flight, it only makes the next stop the last one.
+If that in-flight turn merely goes silent after bounded recovery, silence is not promoted into a
+terminal verdict. The worker may park with its slot free while retaining unresolved-turn state and,
+when the recorder knows it, the exact response identity; that state forbids new `message` wake/new
+work and is not eligible for tab reuse/closure. Only proven activity from a retained exact response
+may resume it. An explicit finish proven to belong to that response, a current canonical final, or
+a user terminal action still ends the ceiling worker normally.
 Workers never run Compact & Resume, automatically or manually: their conversation is their durable
 agent identity, so the 400,000-token boundary changes only later revive eligibility and never opens
 a replacement worker chat.
@@ -158,6 +179,8 @@ can keep observation available while disabling state-changing desktop actions.
 - Read-only mode removes effective file-write, command, control and clipboard-write permissions
   without pretending the underlying configuration was changed.
 - Approved filesystem roots do not sandbox command execution or desktop control.
+- CoS's own windows are never listed, inspected, focused or targeted by window id, on Windows or
+  macOS. This is not a sandbox: desktop-level coordinates still reach whatever is on screen.
 - Tool results and validation errors are bounded; large structured or binary payloads must not
   grow without an explicit cap.
 

@@ -17,14 +17,14 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
       - name: Verify and archive corresponding native sources
         run: node scripts/package-native-sources.mjs
       - name: Upload source artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: package-native-sources
           path: release/Chat-On-Steroids-Native-Sources.tar.gz
@@ -91,9 +91,9 @@ jobs:
     timeout-minutes: 75
 
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           architecture: ${{ matrix.arch }}
@@ -108,6 +108,9 @@ jobs:
 
       - name: Verify
         run: npm run verify:ci
+        env:
+          # Only the slow Intel macOS runner retries a failed test; every other job stays strict.
+          COS_TEST_RETRY: ${{ matrix.platform == 'darwin' && matrix.arch == 'x64' && '2' || '0' }}
 
       - name: Prove native runner target
         run: node -e "if(process.platform!=='${{ matrix.platform }}'||process.arch!=='${{ matrix.arch }}')throw new Error('Expected ${{ matrix.platform }}-${{ matrix.arch }}, got '+process.platform+'-'+process.arch)"
@@ -324,7 +327,7 @@ jobs:
           run_appimage_smoke forced-fallback "$fallback_smoke_root" "$fake_bin:$PATH" appimage-fallback-gui.log
 
       - name: Upload package artifacts
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.files }}
@@ -338,10 +341,10 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Download packages
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: package-*
           path: release
@@ -350,10 +353,12 @@ jobs:
       - name: Package standalone extension
         run: |
           set -euo pipefail
+          # Same stamp as the packaged app, so a ZIP-loaded extension reports its build (#568).
+          node scripts/write-extension-stamp.mjs
           (cd extension && zip -qr ../release/Chat-On-Steroids-Extension.zip . -x '*.map')
           zip -q release/Chat-On-Steroids-Extension.zip LICENSE
           node -e "const m=require('./extension/manifest.json'),p=require('./package.json');if(m.version!==p.version)throw new Error('Extension '+m.version+' does not match app '+p.version)"
-          for required in manifest.json background.js chatgpt-dom.js content.js fiber.js overlay.css popup.html popup.css popup.js icons/icon16.png icons/icon32.png icons/icon48.png icons/icon128.png LICENSE; do
+          for required in manifest.json build-stamp.txt background.js chatgpt-dom.js content.js fiber.js overlay.css popup.html popup.css popup.js icons/icon16.png icons/icon32.png icons/icon48.png icons/icon128.png LICENSE; do
             unzip -Z1 release/Chat-On-Steroids-Extension.zip | grep -Fxq "$required" || { echo "Extension zip missing $required" >&2; exit 1; }
           done
 
@@ -391,7 +396,7 @@ jobs:
           cat release/SHA256SUMS.txt
 
       - name: Upload release candidate
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           # Artifact names reject `/`, so direct candidate runs from feature/foo refs must not
           # fail after all six package jobs. A run id is filesystem-safe and caller-stable.

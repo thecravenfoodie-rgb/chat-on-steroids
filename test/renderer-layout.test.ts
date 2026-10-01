@@ -34,17 +34,17 @@ beforeAll(async () => {
     fs.readFile(path.join(process.cwd(), 'src', 'renderer', 'chat.ts'), 'utf8')
   ]);
   document = new JSDOM(html).window.document;
-  css = styles;
+  css = styles + '\n' + await fs.readFile(path.join(process.cwd(), 'src/renderer/settings.css'), 'utf8');
   chatSource = chat;
 });
 
 it('searches whole settings sections without empty headings, orphaned controls or lost conditional visibility', () => {
   const view = document.querySelector<HTMLElement>('[data-view="settings"]')!;
-  const sections = [...view.querySelectorAll<HTMLElement>('.settings-section-title')];
+  const sections = [...view.querySelectorAll<HTMLElement>('.automation-section-head')];
   const conditional = document.getElementById('goalModels')!;
   expect(conditional.hidden).toBe(true);
   filterSettingsSections(view, '  SESSION FINISH  ');
-  expect(sections.filter(section => !section.hidden).map(section => section.textContent)).toEqual(['Keep the turn open']);
+  expect(sections.filter(section => !section.hidden).map(section => section.querySelector('h2')?.textContent)).toEqual(['Keep the turn open']);
   for (const section of sections) expect((section.nextElementSibling as HTMLElement).hidden).toBe(section.hidden);
   expect(document.getElementById('finishTool')!.closest('.pane')!.hasAttribute('hidden')).toBe(false);
   expect(document.getElementById('goalKey')!.closest('.pane')!.hasAttribute('hidden')).toBe(true);
@@ -67,11 +67,75 @@ it('limits the existing tool-detail preference to handoff briefs', () => {
   expect(chatSource).toContain("applyChatChecked($<HTMLInputElement>('goalIncludeToolCalls')");
 });
 
-it('keeps the context circle in the gear group rather than an auto-placed composer grid cell', () => {
+it('places context before the model picker and keeps native compaction actions in its dialog', () => {
   const group = document.getElementById('composerSettings')!.parentElement!;
-  expect(group.classList.contains('composer-options')).toBe(true);
-  expect(document.getElementById('contextMeter')!.parentElement).toBe(group);
+  expect(group.classList.contains('composer-primary-controls')).toBe(true);
+  expect(document.getElementById('contextMeter')!.nextElementSibling?.id).toBe('modelMenu');
+  expect(document.getElementById('compactSession')!.closest('[role=dialog]')?.id).toBe('contextMeterInfo');
+  expect(document.getElementById('cancelCompaction')!.closest('[role=dialog]')?.id).toBe('contextMeterInfo');
   expect(document.getElementById('contextMeterInfo')!.parentElement?.id).toBe('contextMeter');
+});
+
+it('centers the accessible Chats refresh icon without an extra grid text row', () => {
+  const refresh = document.getElementById('chatRefresh')!;
+  expect(refresh.getAttribute('aria-label')).toBe('Refresh chats');
+  expect(refresh.children).toHaveLength(1);
+  expect(refresh.firstElementChild?.matches('i.ico.ph.ph-arrow-clockwise[aria-hidden="true"]')).toBe(true);
+  expect(refresh.textContent?.trim()).toBe('');
+});
+
+it('uses the fork back-to-chat control and separates the Usage cost sections', async () => {
+  const back = document.getElementById('backToChat')!;
+  expect(back.querySelector('.ph-arrow-left')).not.toBeNull();
+  expect(back.querySelector('span')?.textContent).toBe('Back to chat');
+  const costCaption = document.getElementById('usageCost')!;
+  expect(costCaption.closest('.settings-section-head')?.querySelector('h2')?.textContent).toBe('Cost estimate per day');
+  expect(document.querySelectorAll('#usageCost')).toHaveLength(1);
+  expect(css).toContain('.usage-sections { display: grid; gap: 24px; }');
+  expect(css).toContain('.usage-section > .settings-section-head { min-height: 0; }');
+  const usage = await fs.readFile(path.join(process.cwd(), 'src', 'renderer', 'usage.ts'), 'utf8');
+  expect(usage).toContain("el('section', 'usage-days-model')");
+  expect(usage).toContain("el('section', 'usage-days-daily')");
+  expect(css).toMatch(/\.usage-days-model\s*\{[^}]*padding: 0 18px 18px;/);
+  expect(css).toMatch(/\.usage-days-daily\s*\{[^}]*border-top: 1px solid var\(--line\);/);
+});
+
+it('uses the robot for Sub-agents in Workspace as well as settings navigation', async () => {
+  const main = await fs.readFile(path.join(process.cwd(), 'src/renderer/main.ts'), 'utf8');
+  expect(main).toContain("groupShell('agents', 'Sub-agents', 'i-agents', enabled)");
+  expect(document.querySelector('#tabs [data-tab="settings"] .ph-robot')).not.toBeNull();
+});
+
+it('keeps the fork settings spacing for empty folders and flat Setup connectors', () => {
+  expect(css).toMatch(/#rootsEmpty\s*\{[^}]*padding: 10px 14px;[^}]*line-height: 1\.5;/);
+  expect(css).toMatch(/\.connectors\s*\{[^}]*gap: 0;[^}]*margin-top: 16px;/);
+  expect(css).toMatch(/\.connector\s*\{\s*border-top: 1px solid var\(--line\);\s*padding: 16px 0;/);
+  expect(css).toContain('.connector:first-child { border-top: 0; }');
+});
+
+it('does not let the old Workspace scroll override disable rounded surface clipping', () => {
+  expect(css).not.toMatch(/\[data-panel='home'\] \.scroll\s*\{[^}]*overflow:\s*visible/);
+  expect(css).toMatch(/\.setup-profile-option\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\) 30px;/);
+});
+
+it('keeps dock tabs and Files actions on one horizontally scrollable row without visible scrollbars', () => {
+  expect(css).toMatch(/\.work-dock-tabs\s*\{[^}]*overflow-x:\s*auto;[^}]*scrollbar-width:\s*none;/);
+  expect(css).toMatch(/\.work-dock-tabs::-webkit-scrollbar\s*\{\s*display:\s*none;/);
+  expect(css).toMatch(/\.file-panel-toolbar-actions\s*\{[^}]*flex-wrap:\s*nowrap;[^}]*overflow-x:\s*auto;[^}]*scrollbar-width:\s*none;/);
+  expect(css).toMatch(/\.file-panel-toolbar-actions::-webkit-scrollbar\s*\{\s*display:\s*none;/);
+  expect(css).toMatch(/\.file-panel-toolbar > \.file-panel-refresh\s*\{\s*flex:\s*0 0 28px;/);
+  expect(css).toMatch(/\.review-panel \.file-changes-header-content\s*\{[^}]*overflow-x:\s*auto;[^}]*scrollbar-width:\s*none;/);
+  expect(css).toMatch(/\.review-panel \.file-changes-header-content::-webkit-scrollbar\s*\{\s*display:\s*none;/);
+  expect(css).toMatch(/\.work-dock-tab:is\(\.is-selected, :hover, :focus-within\)\s*\{\s*background:\s*var\(--hover\);/);
+  expect(css).toMatch(/\.work-dock-bar \.work-dock-tab > \.btn:hover:not\(:disabled\)\s*\{\s*background:\s*transparent;/);
+  expect(css).toMatch(/\.work-dock-tab > \.btn:focus-visible\s*\{\s*outline:/);
+});
+
+it('keeps unified docks out of Settings without clearing their chat state', () => {
+  expect(css).toContain(".app[data-screen='settings'] .work-dock { display: none; }");
+  expect(css).toContain(".app[data-screen='settings'] [data-panel='chat'].has-work-dock { grid-template-columns: minmax(0, 1fr); }");
+  expect(css).toContain(".app[data-screen='settings'] .work-panel-resize { display: none; }");
+  expect(css).toContain(".app[data-screen='chat'] .work-dock[hidden].is-closing { display: flex !important; }");
 });
 
 it('does not expose a periodic Astra continuation outside session_finish', () => {
@@ -239,6 +303,11 @@ describe('the session-row chat actions', () => {
     expect(chatSource).toContain("ui(indicator, 'aria-label', () => t(status.text))");
   });
 
+  it('uses the configured accent for working and unseen response state', () => {
+    expect(rule('.session-status.is-active, .session-status.is-working')).toContain('border-top-color: var(--accent)');
+    expect(rule('.session-status.is-unseen')).toContain('background: var(--accent)');
+  });
+
   /**
    * The Unattributed row is the one row with no chat to block, and it was the one row with no
    * way to stop what it was showing. The switch that governs it is app-wide by necessity — the
@@ -299,7 +368,9 @@ describe('the chat panel cards', () => {
     // Subhead, scrolling conversation, shared plan/queue dock, composer and footer.
     const layoutChildren = [...card.children].filter(child => child.id !== 'chatSettingsBtn');
     expect(layoutChildren.length).toBe(5);
-    expect(document.getElementById('composerDock')!.firstElementChild?.id).toBe('agentPlan');
+    const dockBody = document.getElementById('composerDock')!.firstElementChild!;
+    expect(dockBody.classList.contains('composer-dock-body')).toBe(true);
+    expect(dockBody.firstElementChild?.id).toBe('agentPlan');
     expect(document.getElementById('inputQueue')!.closest('#chatBody')).not.toBeNull();
     expect(card.classList.contains('is-session')).toBe(true);
     expect(tracks("[data-panel='chat'] .card.is-session")).toHaveLength(layoutChildren.length);
@@ -430,6 +501,8 @@ describe('the settings sheet', () => {
     expect(order.indexOf('goalReasoning')).toBeLessThan(order.indexOf('goalPromptEdit'));
     // Closed until asked for: the catalogue is several hundred long and costs a round trip.
     expect(document.getElementById('goalModels')!.hasAttribute('hidden')).toBe(true);
+    expect(document.getElementById('handoffPromptPanel')!.hasAttribute('hidden')).toBe(true);
+    expect(document.getElementById('handoffPrompt')?.tagName).toBe('TEXTAREA');
     expect(document.getElementById('goalPromptPanel')!.hasAttribute('hidden')).toBe(true);
     expect(document.getElementById('goalPrompt')?.tagName).toBe('TEXTAREA');
   });
@@ -517,14 +590,19 @@ describe('the window as a whole', () => {
   });
 
   it('never scrolls sideways', () => {
-    // Wide authored tables/code may scroll locally; the surrounding app must not.
+    // Wide authored content and compact dock controls may scroll locally; the app must not.
     const horizontal = [...css.matchAll(/([^{}]+)\{[^{}]*overflow-x:\s*(?:auto|scroll)[^{}]*\}/g)];
     expect(horizontal.map(match => match[1]!.trim())).toEqual([
       '.msg.rich .markdown-table',
+      '.file-panel-toolbar-actions',
+      '.review-panel .file-changes-header-content',
       '.file-preview-markdown pre',
       '.file-preview-markdown-table',
       '.file-pdf-viewport',
-      '.terminal-tabs'
+      '.terminal-tabs',
+      '.work-dock-tabs',
+      '.usage-heatmap-surface',
+      '.usage-table-stack'
     ]);
     expect(css).not.toMatch(/overflow:\s*(auto|scroll)\s+/);
     // The one scrolling surface in the app is vertical only.

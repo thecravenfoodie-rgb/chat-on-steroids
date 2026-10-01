@@ -6,13 +6,18 @@ import { terminateProcessTree } from '../src/main/exec.js';
 import path from 'node:path';
 import { createServer } from 'node:http';
 import { pluginCatalog } from '../src/main/plugins/catalog.js';
+import { initUvRuntime } from '../src/main/plugins/uv-runtime.js';
 import { makeTempDir, removeTempDir } from './helpers.js';
 
 // Opt-in: actual pinned packages on each CI OS; editor discovery needs no user project.
 // Playwright executes against an ephemeral loopback page, never the user's browser/profile.
-for (const id of ['blender', 'unity', 'playwright']) {
+// Every locally installed catalog entry is here (fetch has its own Python test); heygen and
+// recraft are hosted OAuth services with nothing to install.
+for (const id of ['blender', 'unity', 'playwright', 'memory']) {
   it.runIf(process.env.COS_PLUGIN_LIVE_TEST === '1')(`installs ${id} and verifies its advertised tool preview over stdio`, async () => {
     const directory = await makeTempDir(`cos-catalog-${id}-`);
+    // As at app startup: without uv on PATH, installs fall back to the managed copy under userData.
+    initUvRuntime(directory);
     const client = new Client({ name: 'CoS catalog discovery acceptance', version: '1.0.0' });
     let transport: StdioClientTransport | undefined;
     const page = createServer((_request, response) => { response.setHeader('Content-Type', 'text/html'); response.end('<h1>CoS plugin browser fixture</h1>'); });

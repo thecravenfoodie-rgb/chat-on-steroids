@@ -2,7 +2,7 @@ import { ui, t } from './i18n.js';
 import type { AppState } from '../shared/types.js';
 import type { SettingsPatch } from '../preload/index.js';
 import type { PluginSnapshot, PluginView, PluginCatalogEntry, PluginSource } from '../shared/plugins.js';
-import { $, el, run, toast } from './dom.js';
+import { $, disclosureChevron, el, run, toast } from './dom.js';
 
 let snapshot: PluginSnapshot = { plugins: [], catalog: [], schemaRevision: 0 };
 let epoch = 0;
@@ -14,10 +14,19 @@ function button(label: string | (() => string), action: () => void | Promise<voi
   node.type = 'button';
   node.addEventListener('click', async () => {
     node.disabled = true;
-    try { await action(); } catch (error) { toast(error instanceof Error ? error.message : 'Plugin operation failed'); }
+    try { await action(); } catch (error) { toast(error instanceof Error ? error.message : t('Plugin operation failed')); }
     finally { node.disabled = false; }
   });
   return node;
+}
+/**
+ * A disclosure headline with the app's chevron, the only sign it opens once the native marker is
+ * hidden. The words sit in their own span, so a language change rewrites them without the chevron.
+ */
+function disclosureSummary(label: () => string): HTMLElement {
+  const summary = el('summary');
+  summary.append(disclosureChevron('details-chevron'), el('span', '', label));
+  return summary;
 }
 function art(id: string): HTMLElement {
   const img = document.createElement('img'); img.className = 'plugin-icon'; img.alt = '';
@@ -62,11 +71,11 @@ export function applyPluginsState(next: AppState): void {
     ? contacted ? t("Connected to ChatGPT") : t("Connector online · waiting for ChatGPT")
     : configured ? t("Plugins connector offline") : t("Setup required · connect your plugins"));
   status.dataset.live = String(surface?.state === 'live');
-  status.title = surface?.detail ?? '';
+  ui(status, 'title', () => t(surface?.detail ?? ''));
   const setupStatus = document.getElementById('pluginSetupStatus');
   if (setupStatus) ui(setupStatus, 'textContent', () => surface?.state === 'live'
     ? t("{0} tools available · {1}", [surface.tools.length, surface.lastRequestAt ? t("Connected to ChatGPT") : t("Ready to add in ChatGPT")])
-    : surface?.state === 'error' ? surface.detail : t("Save your connection below to make enabled plugins available in ChatGPT."));
+    : surface?.state === 'error' ? t(surface.detail) : t("Save your connection below to make enabled plugins available in ChatGPT."));
 }
 function showConnection(): void {
   if (!appState) { toast(t("Connection settings are still loading.")); return; }
@@ -102,8 +111,8 @@ function showConnection(): void {
     if (tunnel && !tunnel.value.trim()) { tunnel.focus(); throw new Error(t("Enter your Plugins tunnel ID.")); }
     if (key?.value) { const next = await run(window.api.setApiKey(key.value)); if (!next) return; key.value = ''; applyAppState(next); applyPluginsState(next); }
     if (tunnel) {
-      const { capabilities, readOnly, tunnel: previousTunnel, ui, sessions, compaction, multiAgent, goal, mcp } = appState.config;
-      const base: SettingsPatch = { capabilities, readOnly, tunnel: previousTunnel, ui, sessions, compaction, multiAgent, goal, mcp };
+      const { capabilities, readOnly, commandAllowlist, tunnel: previousTunnel, ui, sessions, compaction, multiAgent, goal, mcp } = appState.config;
+      const base: SettingsPatch = { capabilities, readOnly, commandAllowlist, tunnel: previousTunnel, ui, sessions, compaction, multiAgent, goal, mcp };
       const next = await run(window.api.saveSettings({ ...base, tunnel: { ...previousTunnel, pluginsTunnelId: tunnel.value.trim() } }, base));
       if (!next) return; applyAppState(next); applyPluginsState(next);
     }
@@ -204,7 +213,7 @@ function showPlugin(plugin: PluginView): void {
   intro.append(el('p', '', () => recipe ? t(recipe.description) : t("Your own MCP server, available in your conversations.")), configure);
   hero.append(art(recipe?.icon ?? plugin.catalogId ?? 'custom'), intro); body.append(hero);
   const tools = el('section', 'plugin-detail-tools'); tools.dataset.pluginDetail = plugin.id; renderPluginTools(tools, plugin); body.append(tools);
-  const about = document.createElement('details'); about.className = 'plugin-about'; about.append(el('summary', '', () => t("About this plugin")));
+  const about = document.createElement('details'); about.className = 'plugin-about'; about.append(disclosureSummary(() => t("About this plugin")));
   about.append(el('p', 'plugin-source', plugin.source.url ?? plugin.source.package ?? plugin.source.command ?? plugin.source.kind), el('p', 'muted', () => `${plugin.version || t("Custom version")} · ${plugin.license || t("License not supplied")}`), el('p', '', () => t("Runs while installed and enabled, including after reopening the app. Disable or uninstall it to stop its connection. Restart reconnects and refreshes its tools.")));
   if (plugin.homepage ?? recipe?.homepage) about.append(button(() => t("Open upstream project"), async () => { await run(window.api.openLink((plugin.homepage ?? recipe!.homepage)!)); }));
   body.append(about);
@@ -248,7 +257,7 @@ function showRecipe(recipe: PluginCatalogEntry): void {
     const tools = el('ul', 'plugin-tool-preview'); for (const name of recipe.tools) tools.append(el('li', '', () => t(name)));
     body.append(el('h3', 'plugin-preview-title', () => t("Tool preview")), tools);
   }
-  const setup = document.createElement('details'); setup.className = 'plugin-about'; setup.append(el('summary', '', () => t("Setup requirements")));
+  const setup = document.createElement('details'); setup.className = 'plugin-about'; setup.append(disclosureSummary(() => t("Setup requirements")));
   const steps = el('ol', 'plugin-steps'); for (const step of recipe.instructions) steps.append(el('li', '', () => t(step))); setup.append(steps, button(() => t("Open project & setup guide"), async () => { await run(window.api.openLink(recipe.homepage)); })); body.append(setup);
   const values = new Map<string, HTMLInputElement>();
   for (const item of recipe.fields) { const input = field(body, item.label, '', item.secret, item.placeholder); input.required = !!item.required; values.set(item.key, input); }
@@ -273,13 +282,27 @@ function showCustom(kind: PluginSource['kind'], path = ''): void {
   select.value = kind; label.append(select); body.append(label);
   const location = field(body, () => t("Package, executable, URL or bundle path"), path); const version = field(body, () => t("Version (npm / Python)"), '', false, () => t("Pin a published version for reproducible installation."));
   const args = field(body, () => t("Arguments (JSON array)"), '[]', false, () => t("Example: [\"--port\", \"9876\"]. Passed directly, without a shell."));
+  // Remote servers can sign in through the provider instead of a static header; the backend
+  // already supports `auth: "oauth"`, so only the choice was missing here.
+  const authLabel = el('label', 'plugin-field'); authLabel.append(el('span', '', () => t("Authentication"))); const auth = document.createElement('select');
+  for (const [value, text] of [['', t("None or a static credential")], ['oauth', t("OAuth (sign in through the provider)")]]) { const option = document.createElement('option'); option.value = value!; option.textContent = text!; auth.append(option); }
+  authLabel.append(auth); body.append(authLabel);
   const key = field(body, () => t("Credential name (optional)"), '', false, () => t("An environment variable for local servers, or an HTTP header such as Authorization.")); const credential = field(body, () => t("Credential value"), '', true);
+  const oauth = () => select.value === 'remote' && auth.value === 'oauth';
+  const sync = () => { authLabel.hidden = select.value !== 'remote'; key.parentElement!.hidden = credential.parentElement!.hidden = oauth(); };
+  select.addEventListener('change', sync); auth.addEventListener('change', sync); sync();
   body.append(el('p', 'hint', () => t("Remote servers must support MCP Streamable HTTP. GitHub links require a known recipe or supported manifest. Local servers run outside the CoS folder sandbox.")), button(() => t("Install and connect"), async () => {
     const selected = select.value as PluginSource['kind']; const value = location.value.trim(); if (!value) throw new Error(t("Enter the server location first."));
     const parsed: unknown = JSON.parse(args.value); if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === 'string')) throw new Error(t("Arguments must be a JSON array of strings."));
     const source: PluginSource = { kind: selected, args: parsed };
     if (selected === 'remote' || selected === 'github') source.url = value; else if (selected === 'mcpb') source.path = value; else if (selected === 'command') source.command = value; else { source.package = value; if (version.value.trim()) source.version = version.value.trim(); }
-    if (await mutate(window.api.pluginsInstall({ name: name.value, source, credentials: key.value.trim() && credential.value ? { [key.value.trim()]: credential.value } : {} }))) box.close();
+    const signIn = oauth(); if (signIn) source.auth = 'oauth';
+    const before = new Set(snapshot.plugins.map(plugin => plugin.id));
+    if (await mutate(window.api.pluginsInstall({ name: name.value, source, credentials: !signIn && key.value.trim() && credential.value ? { [key.value.trim()]: credential.value } : {} }))) {
+      box.close();
+      // Like a catalog OAuth recipe: land on the new plugin, where its Sign in button is.
+      const installed = signIn ? snapshot.plugins.find(plugin => !before.has(plugin.id)) : undefined; if (installed) showPlugin(installed);
+    }
   }, true));
 }
 export function initPlugins(onState: (next: AppState) => void = () => {}): void {

@@ -3,6 +3,7 @@
 const { app, BrowserWindow } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
+const LANGUAGES = 1 + require('node:fs').readdirSync(path.join(__dirname, '../src/renderer/locales')).filter(name => name.endsWith('.json')).length;
 const assert = require('node:assert/strict');
 app.setPath('userData', path.resolve(__dirname, '../outputs/setup-guide-runtime'));
 
@@ -58,7 +59,8 @@ app.whenReady().then(async () => {
       [800, 650, 1, 'es', 'dark'], [800, 650, 1, 'zh-TW', 'light'],
       [1100, 900, 1, 'ja', 'dark'], [1100, 900, 1.5, 'ja', 'light'], [640, 720, 1, 'ja', 'dark'],
       [1100, 900, 1, 'tr', 'dark'], [1100, 900, 1.5, 'tr', 'light'], [640, 720, 1, 'tr', 'dark'],
-      [1100, 900, 1, 'fr', 'dark'], [1100, 900, 1.5, 'fr', 'light'], [640, 720, 1, 'fr', 'dark']
+      [1100, 900, 1, 'fr', 'dark'], [1100, 900, 1.5, 'fr', 'light'], [640, 720, 1, 'fr', 'dark'],
+      [1100, 900, 1, 'pt-PT', 'dark'], [1100, 900, 1.5, 'pt-PT', 'light'], [640, 720, 1, 'pt-PT', 'dark']
     ]) {
       win.setSize(width, height);
       win.webContents.setZoomFactor(zoom);
@@ -67,14 +69,15 @@ app.whenReady().then(async () => {
       const header = await win.webContents.executeJavaScript(`(async () => {
         const panel = document.querySelector('[data-panel="setup"]'); panel.scrollTop = 0;
         await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-        const tabs = panel.querySelector('.language-tabs'), title = panel.querySelector('.settings-heading');
+        const tabs = panel.querySelector('.language-tabs'), title = panel.querySelector('.setup-heading h1');
         const bounds = tabs.getBoundingClientRect(), heading = title.getBoundingClientRect();
         const buttons = [...tabs.querySelectorAll('button')];
         return {
           overflow: panel.scrollWidth > panel.clientWidth,
           separated: heading.right <= bounds.left || heading.bottom <= bounds.top,
-          compact: bounds.width <= 330,
-          flagsOnly: buttons.length === 7 && buttons.every(button => !button.textContent.trim() && button.querySelector('svg')),
+          // One flag per shipped language (English plus each locale catalog), about 46px each.
+          compact: bounds.width <= buttons.length * 46,
+          flagsOnly: buttons.length === ${LANGUAGES} && buttons.every(button => !button.textContent.trim() && button.querySelector('svg')),
           labeled: buttons.every(button => button.title && button.title === button.getAttribute('aria-label')),
           selected: buttons.filter(button => button.getAttribute('aria-pressed') === 'true').map(button => button.dataset.language),
           reachable: buttons.every(button => {
@@ -145,22 +148,25 @@ app.whenReady().then(async () => {
       win.webContents.sendInputEvent({type:'keyUp', keyCode});
       await win.webContents.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
     };
-    await key('Tab');
-    assert.equal(await win.webContents.executeJavaScript('document.activeElement.dataset.language'), 'es');
-    await key('Enter');
-    assert.equal(await win.webContents.executeJavaScript('document.documentElement.lang'), 'es');
-    await key('Tab'); await key('Tab');
-    assert.equal(await win.webContents.executeJavaScript('document.activeElement.dataset.language'), 'ja');
-    await key('Space');
-    assert.equal(await win.webContents.executeJavaScript('document.documentElement.lang'), 'ja');
-    await key('Tab'); await key('Space');
-    assert.equal(await win.webContents.executeJavaScript('document.documentElement.lang'), 'tr');
-    await key('Tab'); await key('Space');
-    assert.equal(await win.webContents.executeJavaScript('document.documentElement.lang'), 'fr');
+    // Each step moves focus to another flag and activates it natively (Enter or Space); the page must
+    // switch to exactly the focused language. Derived from the live focus, not a fixed flag order.
+    const focused = () => win.webContents.executeJavaScript('document.activeElement.dataset.language');
+    const lang = () => win.webContents.executeJavaScript('document.documentElement.lang');
+    const visited = new Set(['en']);
+    let last = 'en';
+    for (const [tabs, activation] of [[1, 'Enter'], [2, 'Space'], [1, 'Space'], [1, 'Space']]) {
+      for (let i = 0; i < tabs; i++) await key('Tab');
+      const target = await focused();
+      assert.ok(target && target !== last, 'Tab reaches another language flag: ' + target);
+      await key(activation);
+      assert.equal(await lang(), target, activation + ' activates the focused language');
+      visited.add(target); last = target;
+    }
+    assert.ok(visited.size >= 4, 'Keyboard reached several languages: ' + [...visited].join(','));
     await win.loadURL(server.resolvedUrls.local[0] + 'setup-preview.html');
     assert.deepEqual(await win.webContents.executeJavaScript(`({language:document.documentElement.lang,
-      selected:document.querySelector('[data-language="fr"]').getAttribute('aria-pressed'),
-      preference:document.getElementById('uiLanguage').value})`), {language:'fr', selected:'true', preference:'fr'});
+      selected:document.querySelector('[data-language="${last}"]').getAttribute('aria-pressed'),
+      preference:document.getElementById('uiLanguage').value})`), {language:last, selected:'true', preference:last});
     // Native modal, Escape dismissal and focus restoration must work without opening a browser.
     await win.webContents.executeJavaScript(`(() => {
       const button=document.querySelectorAll('[data-setup-guide="plugin"] .setup-enlarge')[1];

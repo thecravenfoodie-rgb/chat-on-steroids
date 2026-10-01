@@ -6,7 +6,7 @@ import { getConfig } from './config.js';
 import { listDirectoryLevel, readTextFile, statInfo } from './codex/read-backend.js';
 import { getProject, projectWorkspace } from './projects.js';
 import { rawPromises as fs } from './rawfs.js';
-import { isContained, resolvePath, SandboxError } from './sandbox.js';
+import { isContained, nativePathIdentity, resolvePath, SandboxError } from './sandbox.js';
 import type {
   ProjectDirectoryListing,
   ProjectFileKind,
@@ -31,6 +31,29 @@ async function recheckTarget(target: Omit<ProjectFileTarget, 'kind'>): Promise<v
   if (!sameRealPath(current.real, target.real) || !sameRealPath(current.projectReal, target.projectReal)) {
     throw new Error('The project file changed location. Reload it before continuing.');
   }
+}
+
+/**
+ * Re-resolve the owning directory immediately before a pathname mutation.
+ *
+ * Node does not expose a portable openat/CreateFile-relative API, so pathname syscalls cannot
+ * make an OS-wide lock out of this check. Keeping the final parent identity check adjacent to
+ * the syscall still prevents stale project/link resolutions in the normal application path and
+ * catches a concurrent junction/symlink replacement whenever it is visible before mutation.
+ */
+async function recheckMutationParent(target: Omit<ProjectFileTarget, 'kind'>): Promise<void> {
+  const relativeParent = parentPath(target.path);
+  const current = await projectFileTarget(target.projectId, relativeParent, { allowRoot: true });
+  if (current.kind !== 'directory' || !sameRealPath(current.projectReal, target.projectReal) ||
+      !sameRealPath(current.real, path.dirname(target.real))) {
+    throw new Error('The project folder changed location. Reload it before continuing.');
+  }
+}
+
+/** Revalidate an already-resolved Files target at the last practical pathname boundary. */
+export async function revalidateProjectFileTarget(target: ProjectFileTarget): Promise<void> {
+  await recheckTarget(target);
+  await recheckMutationParent(target);
 }
 
 /** Exact bytes and identity from one bounded open file, including BOM and final line endings. */
@@ -111,9 +134,7 @@ function parentPath(relative: string): string {
 }
 
 function sameRealPath(left: string, right: string): boolean {
-  const a = path.resolve(left);
-  const b = path.resolve(right);
-  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+  return nativePathIdentity(left) === nativePathIdentity(right);
 }
 
 async function context(projectId: string): Promise<{
@@ -201,6 +222,9 @@ export async function projectFileTarget(
   return { ...target, kind };
 }
 
+/** Repository internals and Finder metadata, hidden in the Files tree as editors do. Core tools still see them. */
+const HIDDEN_ENTRIES = new Set(['.git', '.DS_Store']);
+
 export async function listProjectDirectory(projectId: string, relativeDirectory = ''): Promise<ProjectDirectoryListing> {
   const target = await projectFileTarget(projectId, relativeDirectory, { allowRoot: true });
   if (target.kind !== 'directory') throw new Error('Choose a project folder');
@@ -209,7 +233,7 @@ export async function listProjectDirectory(projectId: string, relativeDirectory 
     projectId,
     projectName: target.projectName,
     directory: target.path,
-    entries: listed.entries.map(entry => ({
+    entries: listed.entries.filter(entry => !HIDDEN_ENTRIES.has(entry.name)).map(entry => ({
       name: entry.name,
       path: childPath(target.path, entry.name),
       kind: entry.type,
@@ -423,6 +447,11 @@ export async function createProjectEntry(
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
+  await recheckMutationParent(target);
+  const currentTarget = await resolveTarget(projectId, relative, { allowMissing: true, allowRoot: false });
+  if (!sameRealPath(currentTarget.projectReal, target.projectReal) || !sameRealPath(currentTarget.real, target.real)) {
+    throw new Error('The project folder changed location. Reload it before continuing.');
+  }
   if (kind === 'directory') await fs.mkdir(target.real);
   else {
     const handle = await fs.open(target.real, 'wx');
@@ -452,10 +481,16 @@ export async function renameProjectEntry(
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
   }
+  await revalidateProjectFileTarget(source);
+  await recheckMutationParent(destination);
+  const currentDestination = await resolveTarget(projectId, relative, { allowMissing: true, allowRoot: false });
+  if (!sameRealPath(currentDestination.projectReal, destination.projectReal) ||
+      !sameRealPath(currentDestination.real, destination.real)) {
+    throw new Error('The project folder changed location. Reload it before continuing.');
+  }
   // The sandbox resolution above validates the new spelling even when a Windows case-only
   // rename resolves back to the existing file identity. Use the sibling spelling for rename so
   // the requested case is not lost to realpath canonicalisation.
-  void destination;
   await fs.rename(source.real, lexicalDestination);
   return { projectId, path: relative, kind: source.kind };
 }
@@ -474,7 +509,7 @@ export async function saveProjectTextFile(
     throw new Error(`Edited files must be ${MAX_PREVIEW_BYTES} bytes or smaller`);
   }
   const target = await projectFileTarget(projectId, relativePath, { allowRoot: false, fileOnly: true });
-  const key = process.platform === 'win32' ? target.real.toLowerCase() : target.real;
+  const key = nativePathIdentity(target.real);
   if (activeSaves.has(key) || activeSaves.size >= 32) throw new Error('A file save is already in progress. Try again when it finishes.');
   activeSaves.add(key);
   const temporary = path.join(path.dirname(target.real), `.cos-save-${randomUUID()}.tmp`);
@@ -484,6 +519,7 @@ export async function saveProjectTextFile(
     if (original.revision !== expectedRevision || original.data.length !== expectedBytes || original.stat.mtime.toISOString() !== expectedModifiedAt) {
       throw new Error('File changed on disk. Reload it before saving your edits.');
     }
+    await recheckMutationParent(target);
     const handle = await fs.open(temporary, 'wx', original.stat.mode & 0o777);
     try {
       staged = await handle.stat();
@@ -492,6 +528,7 @@ export async function saveProjectTextFile(
     } finally { await handle.close(); }
     const latest = await textSnapshot(target);
     if (latest.revision !== original.revision) throw new Error('File changed on disk. Reload it before saving your edits.');
+    await recheckMutationParent(target);
     // There is no truncation of the original. Write/flush/rename failures retain its bytes.
     await fs.rename(temporary, target.real);
     staged = null;
