@@ -24,7 +24,7 @@ Reconcile the canonical Chat On Steroids repository with upstream 2.1.23, preser
 
 ## Active Work
 
-Clean-reset reconciliation and local verification, followed by the explicit owner approval gates in D-009. The underlying Phase 1 implementation branch remains `aios/phase-1-core-integration`.
+Candidate validation has passed; await source-publication approval, followed by the remaining independent owner approval gates in D-009. The underlying Phase 1 implementation branch remains `aios/phase-1-core-integration`.
 
 ## Preservation and Approval Boundaries
 
@@ -34,13 +34,19 @@ Clean-reset reconciliation and local verification, followed by the explicit owne
 - Keep the working Core registration until the fresh canonical-built runtime passes local build, installation, startup, and local verification; obtain exact-registration cutover approval afterward.
 - Permanently delete no quarantined repository, acceptance environment, installer, app-data backup, or rollback snapshot until full acceptance, including CoS restart and post-restart Core attribution, passes and final cleanup is approved.
 
-## Pending Verification
+## Candidate Validation
 
-- Candidate full verification, UI checks, ARM64 packaging, and packaged-runtime/bundle checks.
+- Lockfile installation, production build, type checking, public-history/privacy guard, licensing/native-source checks, and the full verification pipeline passed.
+- Full verification passed 6,624 tests across both stages, with 144 expected skips; UI verification passed all 37 checks. One timing-sensitive upstream test timed out on the first run, then passed in isolation and in a complete rerun without a source change.
+- ARM64 DMG/ZIP packaging, packaged native-runtime checks, and macOS bundle audit passed. Packaging output was relocated to a local cache after Desktop File Provider metadata prevented ad-hoc sealing; no production-source patch was introduced.
+- The packaged candidate loaded its window and renderer with fresh isolated data and remained alive for the bounded smoke check. This is candidate startup evidence, not proof of installation or Core acceptance.
+- Packaging remains ad-hoc sealed, without Developer ID signing or notarization. Generated third-party notices reflect the pinned lockfile's installed ARM64 dependencies; package and lockfile remain unchanged from upstream.
+
+## Pending Verification
 - Source-publication approval and independent remote commit verification.
 - Installation, startup, fresh Core cutover, end-to-end acceptance, restart attribution, and pink theme persistence.
 - Phase 1 implementation and provider/bootstrap regression remain unfinished; no completion claim is made for either.
 
 ## Next Executable Action
 
-Finish candidate validation, record exact results, and present the reconciliation diff and candidate identity at the source-publication approval gate. Stop on a substantive verification failure; do not resume speculative recovery patching.
+Present the exact reconciliation diff, candidate identity, and validation evidence at the source-publication approval gate. Do not publish or update canonical main until the owner approves that candidate. Stop on a substantive verification failure; do not resume speculative recovery patching.

@@ -68,8 +68,10 @@
 
 ### 2026-10-01 America/New_York — Clean-reset reconciliation candidate
 
-**Outcome:** Local candidate prepared; publication and runtime gates remain pending.
+**Outcome:** Local candidate built and validated; publication and installation/Core acceptance gates remain pending.
 
 **What happened:** Reconciled canonical baseline `e63c4f7` with pinned upstream 2.1.23 `26d46e0` without conflicts. Preserved canonical project records and adapted the intentional Phase 1 Core terminal/Git regression. Other local patches remain excluded and privately preserved.
 
 **Boundary:** No canonical-main update, installed-app replacement, Core cutover, or permanent cleanup is claimed. Validation evidence and the exact diff must be presented before source-publication approval; subsequent approval gates remain independent. Phase 1 implementation and provider activation remain unfinished.
+
+**Validation:** Full verification passed 6,624 tests with 144 expected skips; all 37 UI checks passed. ARM64 packaging, native-runtime checks, bundle audit, and isolated packaged GUI startup passed. A first-run upstream test timeout passed an isolated and complete retry without code changes. Desktop File Provider metadata required relocating generated packaging output to a local cache; product source was not patched.
